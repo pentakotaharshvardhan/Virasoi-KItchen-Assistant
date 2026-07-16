@@ -23,7 +23,7 @@ spring:
       max-request-size: 10MB
 
 server:
-  port: 8989
+  port: 8080
 
 # ---------------------------------------------------------------------------
 # AI provider used for: formatting ancestor recipes into structured JSON,
