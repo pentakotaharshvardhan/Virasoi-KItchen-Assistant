@@ -25,6 +25,13 @@
 			<artifactId>spring-boot-starter-web</artifactId>
 		</dependency>
 
+
+		<dependency>
+			<groupId>org.springdoc</groupId>
+			<artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+			<version>3.0.3</version>
+		</dependency>
+
 		<!-- WebSocket for continuous audio listening / push notifications -->
 		<dependency>
 			<groupId>org.springframework.boot</groupId>

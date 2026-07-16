@@ -92,3 +92,10 @@ kitchen:
 jwt:
   secret: cGxlYXNlLWNoYW5nZS10aGlzLXNlY3JldC1iZWZvcmUtcHJvZC1kZXBsb3ktMzJieXRlcw==
   expiration-minutes: 1440   # 24 hours
+
+spring-doc:
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true
+    path: /swagger-ui.html
