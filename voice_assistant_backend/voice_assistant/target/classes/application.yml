@@ -2,20 +2,25 @@ spring:
   application:
     name: voice_assistant
 
-  datasource:
-    url: jdbc:postgresql://localhost:5432/voice_assistant
-    username: postgres
-    password: ${DB_PASSWORD}
-    driver-class-name: org.postgresql.Driver
+  spring:
+    datasource:
+      url: ${SPRING_DATASOURCE_URL}
+      username: ${SPRING_DATASOURCE_USERNAME}
+      password: ${SPRING_DATASOURCE_PASSWORD}
+      driver-class-name: org.postgresql.Driver
+      hikari:
+        connection-timeout: 30000
+        maximum-pool-size: 10
 
-  jpa:
-    hibernate:
-      ddl-auto: update
-    show-sql: false
-    open-in-view: false
-    properties:
+    jpa:
       hibernate:
-        format_sql: true
+        ddl-auto: update
+      show-sql: false
+      open-in-view: false
+      database-platform: org.hibernate.dialect.PostgreSQLDialect
+      properties:
+        hibernate:
+          format_sql: true
 
   servlet:
     multipart:
@@ -23,7 +28,7 @@ spring:
       max-request-size: 10MB
 
 server:
-  port: 8989
+  port: 8080
 
 # ---------------------------------------------------------------------------
 # AI provider used for: formatting ancestor recipes into structured JSON,
@@ -34,7 +39,7 @@ server:
 ai:
   base-url: https://generativelanguage.googleapis.com/v1beta
   api-key: ${AI_API_KEY}
-  model: gemini-3.5-flash
+  model: gemini-3.1-flash-lite
   timeout-seconds: 60
 
 # ---------------------------------------------------------------------------
@@ -87,3 +92,10 @@ kitchen:
 jwt:
   secret: cGxlYXNlLWNoYW5nZS10aGlzLXNlY3JldC1iZWZvcmUtcHJvZC1kZXBsb3ktMzJieXRlcw==
   expiration-minutes: 1440   # 24 hours
+
+spring-doc:
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true
+    path: /swagger-ui.html
