@@ -1,5 +1,13 @@
 # Default ignored files
 /shelf/
 /workspace.xml
+# Ignore IntelliJ/IDE configuration files
 .idea/
-*.env
+*.xml
+
+# Ignore build artifacts
+**/target/
+*.jar
+
+# Ignore environment variables
+.env
