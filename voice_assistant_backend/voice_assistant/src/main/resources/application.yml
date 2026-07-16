@@ -2,20 +2,25 @@ spring:
   application:
     name: voice_assistant
 
-  datasource:
-    url: jdbc:postgresql://localhost:5432/voice_assistant
-    username: postgres
-    password: ${DB_PASSWORD}
-    driver-class-name: org.postgresql.Driver
+  spring:
+    datasource:
+      url: ${SPRING_DATASOURCE_URL}
+      username: ${SPRING_DATASOURCE_USERNAME}
+      password: ${SPRING_DATASOURCE_PASSWORD}
+      driver-class-name: org.postgresql.Driver
+      hikari:
+        connection-timeout: 30000
+        maximum-pool-size: 10
 
-  jpa:
-    hibernate:
-      ddl-auto: update
-    show-sql: false
-    open-in-view: false
-    properties:
+    jpa:
       hibernate:
-        format_sql: true
+        ddl-auto: update
+      show-sql: false
+      open-in-view: false
+      database-platform: org.hibernate.dialect.PostgreSQLDialect
+      properties:
+        hibernate:
+          format_sql: true
 
   servlet:
     multipart:
