@@ -1,0 +1,89 @@
+spring:
+  application:
+    name: voice_assistant
+
+  datasource:
+    url: jdbc:postgresql://localhost:5432/voice_assistant
+    username: postgres
+    password: ${DB_PASSWORD}
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    open-in-view: false
+    properties:
+      hibernate:
+        format_sql: true
+
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 10MB
+
+server:
+  port: 8989
+
+# ---------------------------------------------------------------------------
+# AI provider used for: formatting ancestor recipes into structured JSON,
+# and generating brand-new recipes when a requested dish isn't in the DB.
+# Uses Google's Gemini API (gemini-3.5-flash - free tier, rate-limited).
+# Get a free key at https://aistudio.google.com/apikey
+# ---------------------------------------------------------------------------
+ai:
+  base-url: https://generativelanguage.googleapis.com/v1beta
+  api-key: ${AI_API_KEY}
+  model: gemini-3.5-flash
+  timeout-seconds: 60
+
+# ---------------------------------------------------------------------------
+# Speech-to-text: Google Cloud Speech-to-Text v1 REST API, authenticated with
+# a simple API key (Cloud Console -> APIs & Services -> Credentials -> API key,
+# then enable "Cloud Speech-to-Text API" on the project). Google's standard
+# recognition models include ~60 minutes/month free.
+#
+# IMPORTANT: audio-encoding/sample-rate-hertz MUST match whatever format your
+# Flutter recorder actually produces (LINEAR16/16kHz mono WAV below is the
+# safest default - switch to WEBM_OPUS if you're streaming compressed audio).
+# languageCode: use "hi-IN" for Hindi voice commands, "en-IN" for Indian English.
+# ---------------------------------------------------------------------------
+stt:
+  base-url: https://speech.googleapis.com/v1
+  api-key: ${GC_API_KEY}
+  language-code: en-IN
+  audio-encoding: LINEAR16
+  sample-rate-hertz: 16000
+  timeout-seconds: 30
+
+# ---------------------------------------------------------------------------
+# Text-to-speech: Google Cloud Text-to-Speech v1 REST API, same API key as STT
+# above (enable "Cloud Text-to-Speech API" on the same project). Deliberately
+# using a *Standard* voice (not WaveNet/Neural2) since Standard voices sit in
+# Google's much larger free monthly character quota.
+# ---------------------------------------------------------------------------
+tts:
+  base-url: https://texttospeech.googleapis.com/v1
+  api-key: ${GC_API_KEY}
+  language-code: hi-IN
+  voice-name: hi-IN-Standard-A
+  audio-encoding: MP3
+  timeout-seconds: 30
+
+# ---------------------------------------------------------------------------
+# Kitchen-assistant tuning knobs
+# ---------------------------------------------------------------------------
+kitchen:
+  recipe:
+    base-serves: 1                # AI always generates/formats recipes for 1 serve
+    timer-scale-factor-per-serve: 0.12   # +12% timer duration per extra serve, for steps marked scalesWithServes
+
+# ---------------------------------------------------------------------------
+# JWT auth for the Flutter app's login page.
+# `secret` MUST be a Base64-encoded string that decodes to at least 256 bits
+# (32 bytes) for HS256. The value below is only a placeholder for local dev -
+# generate your own, e.g.: openssl rand -base64 32
+# ---------------------------------------------------------------------------
+jwt:
+  secret: cGxlYXNlLWNoYW5nZS10aGlzLXNlY3JldC1iZWZvcmUtcHJvZC1kZXBsb3ktMzJieXRlcw==
+  expiration-minutes: 1440   # 24 hours

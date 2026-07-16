@@ -1,0 +1,277 @@
+package com.example.voice_assistant.websocket;
+
+import com.example.voice_assistant.dto.response.SessionSnapshotDto;
+import com.example.voice_assistant.dto.response.UserTaskDto;
+import com.example.voice_assistant.entity.CookingSession;
+import com.example.voice_assistant.entity.Recipe;
+import com.example.voice_assistant.service.CookingSessionService;
+import com.example.voice_assistant.service.RecipeService;
+import com.example.voice_assistant.service.SchedulerService;
+import com.example.voice_assistant.service.SpeechToTextService;
+import com.example.voice_assistant.service.TextToSpeechService;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.web.socket.*;
+import org.springframework.web.socket.handler.TextWebSocketHandler;
+
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.net.URI;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+/**
+ * The "continuous listening" WebSocket. Protocol (JSON text control frames interleaved with raw
+ * binary audio frames), one utterance at a time:
+ *
+ *   -> {"action":"start_utterance","field":"dish_name|num_serves|ancestor_transcript|step_command",
+ *       "meta":{...optional, e.g. "dishNameHint","createdBy","stepId","seconds"}}
+ *   -> <binary audio chunk(s)>  (as many as needed)
+ *   -> {"action":"end_utterance"}
+ *   <- {"type":"transcript","field":"...","text":"..."}
+ *   <- {"type": "...", "data": {...}}   (business result - see handleUtterance)
+ *
+ * Connect with query params: ws://host/ws/audio?token=<jwt>&sessionId=<uuid optional>
+ * `sessionId` is required for "num_serves" and "step_command" fields (it identifies the
+ * CookingSession); it's optional for "ancestor_transcript" and a first "dish_name" lookup.
+ *
+ * Every "prompt" message (and every session_snapshot, via NotificationService) also carries an
+ * "audioBase64"/"messageAudioBase64" field with synthesized speech (Google Cloud TTS) so the
+ * Flutter app can just play audio instead of doing its own on-device TTS.
+ */
+public class AudioStreamWebSocketHandler extends TextWebSocketHandler {
+
+    private static final Pattern DIGITS = Pattern.compile("(\\d+)");
+
+    private final SpeechToTextService speechToTextService;
+    private final TextToSpeechService textToSpeechService;
+    private final RecipeService recipeService;
+    private final CookingSessionService cookingSessionService;
+    private final SchedulerService schedulerService;
+    private final WebSocketSessionRegistry registry;
+    private final ObjectMapper objectMapper;
+
+    // per-socket scratch state
+    private final Map<String, ByteArrayOutputStream> buffers = new ConcurrentHashMap<>();
+    private final Map<String, String> pendingField = new ConcurrentHashMap<>();
+    private final Map<String, Map<String, Object>> pendingMeta = new ConcurrentHashMap<>();
+    private final Map<String, String> pendingDishName = new ConcurrentHashMap<>();
+
+    public AudioStreamWebSocketHandler(SpeechToTextService speechToTextService, TextToSpeechService textToSpeechService,
+                                        RecipeService recipeService, CookingSessionService cookingSessionService,
+                                        SchedulerService schedulerService, WebSocketSessionRegistry registry,
+                                        ObjectMapper objectMapper) {
+        this.speechToTextService = speechToTextService;
+        this.textToSpeechService = textToSpeechService;
+        this.recipeService = recipeService;
+        this.cookingSessionService = cookingSessionService;
+        this.schedulerService = schedulerService;
+        this.registry = registry;
+        this.objectMapper = objectMapper;
+    }
+
+    @Override
+    public void afterConnectionEstablished(WebSocketSession session) throws Exception {
+        buffers.put(session.getId(), new ByteArrayOutputStream());
+        UUID cookingSessionId = extractSessionId(session);
+        if (cookingSessionId != null) {
+            registry.register(cookingSessionId, session);
+        }
+        send(session, "connected", Map.of("message", "Listening..."));
+    }
+
+    @Override
+    public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
+        buffers.remove(session.getId());
+        pendingField.remove(session.getId());
+        pendingMeta.remove(session.getId());
+        pendingDishName.remove(session.getId());
+        UUID cookingSessionId = extractSessionId(session);
+        if (cookingSessionId != null) {
+            registry.unregister(cookingSessionId, session);
+        }
+    }
+
+    @Override
+    protected void handleTextMessage(WebSocketSession session, TextMessage message) throws Exception {
+        JsonNode node = objectMapper.readTree(message.getPayload());
+        String action = node.path("action").asText("");
+
+        switch (action) {
+            case "start_utterance" -> {
+                buffers.get(session.getId()).reset();
+                pendingField.put(session.getId(), node.path("field").asText(""));
+                Map<String, Object> meta = node.hasNonNull("meta")
+                        ? objectMapper.convertValue(node.path("meta"), Map.class)
+                        : Map.of();
+                pendingMeta.put(session.getId(), meta == null ? Map.of() : meta);
+            }
+            case "end_utterance" -> handleUtterance(session);
+            case "ping" -> send(session, "pong", Map.of());
+            default -> send(session, "error", Map.of("message", "Unknown action: " + action));
+        }
+    }
+
+    @Override
+    protected void handleBinaryMessage(WebSocketSession session, BinaryMessage message) {
+        ByteArrayOutputStream buffer = buffers.get(session.getId());
+        if (buffer != null) {
+            try {
+                buffer.write(message.getPayload().array());
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        }
+    }
+
+    private void handleUtterance(WebSocketSession session) throws Exception {
+        String field = pendingField.getOrDefault(session.getId(), "");
+        Map<String, Object> meta = pendingMeta.getOrDefault(session.getId(), Map.of());
+        byte[] audio = buffers.get(session.getId()).toByteArray();
+
+        String transcript;
+        try {
+            transcript = speechToTextService.transcribe(audio, "utterance.wav");
+        } catch (Exception e) {
+            send(session, "error", Map.of("message", "Transcription failed: " + e.getMessage()));
+            return;
+        }
+        send(session, "transcript", Map.of("field", field, "text", transcript));
+
+        try {
+            switch (field) {
+                case "ancestor_transcript" -> {
+                    String dishNameHint = (String) meta.getOrDefault("dishNameHint", "");
+                    String createdBy = (String) meta.getOrDefault("createdBy", "");
+                    Recipe saved = recipeService.uploadAncestorRecipe(transcript, dishNameHint, createdBy);
+                    send(session, "recipe_saved", saved);
+                }
+                case "dish_name" -> {
+                    Recipe recipe = recipeService.findOrGenerate(transcript);
+                    pendingDishName.put(session.getId(), recipe.getDishName());
+                    send(session, "recipe_found", recipe);
+                    sendPrompt(session, "num_serves", "Got it, " + recipe.getDishName() + ". How many people are you serving?");
+                }
+                case "num_serves" -> {
+                    UUID sessionId = extractSessionId(session);
+                    String dishName = pendingDishName.get(session.getId());
+                    if (sessionId == null || dishName == null) {
+                        send(session, "error", Map.of("message",
+                                "No active cooking session / pending dish. Start a session and say the dish name first."));
+                        break;
+                    }
+                    int serves = extractFirstNumber(transcript, 1);
+                    CookingSession cs = cookingSessionService.getById(sessionId);
+                    cookingSessionService.addDish(cs, dishName, serves);
+                    pendingDishName.remove(session.getId());
+                    SessionSnapshotDto snapshot = schedulerService.tick(sessionId); // NotificationService already attaches speech
+                    send(session, "session_snapshot", snapshot);
+                }
+                case "step_command" -> {
+                    UUID sessionId = extractSessionId(session);
+                    if (sessionId == null) {
+                        send(session, "error", Map.of("message", "sessionId query param is required for step_command"));
+                        break;
+                    }
+                    handleStepCommand(session, sessionId, transcript, meta);
+                }
+                default -> send(session, "error", Map.of("message", "Unknown field: " + field));
+            }
+        } catch (Exception e) {
+            send(session, "error", Map.of("message", e.getMessage() == null ? e.toString() : e.getMessage()));
+        }
+    }
+
+    private void handleStepCommand(WebSocketSession session, UUID sessionId, String transcript, Map<String, Object> meta) throws Exception {
+        String lower = transcript.toLowerCase();
+        UUID stepId = meta.get("stepId") != null ? UUID.fromString(meta.get("stepId").toString()) : currentUserTaskStepId(sessionId);
+
+        if (stepId == null) {
+            send(session, "error", Map.of("message", "No active step to act on right now."));
+            return;
+        }
+
+        SessionSnapshotDto snapshot;
+        if (containsAny(lower, "done", "next", "finished", "complete", "go ahead", "go to next")) {
+            snapshot = schedulerService.completeStep(sessionId, stepId);
+        } else if (containsAny(lower, "wait", "not yet", "hold on", "give me a minute")) {
+            snapshot = schedulerService.waitOnStep(sessionId, stepId);
+        } else if (containsAny(lower, "yes")) {
+            int seconds = extractFirstNumber(transcript, 180); // default 3 minutes if no number heard
+            snapshot = schedulerService.startOptionalTimer(sessionId, stepId, seconds);
+        } else if (containsAny(lower, "no")) {
+            snapshot = schedulerService.tick(sessionId);
+        } else {
+            send(session, "error", Map.of("message", "Didn't understand step command: \"" + transcript + "\""));
+            return;
+        }
+        send(session, "session_snapshot", snapshot);
+    }
+
+    private UUID currentUserTaskStepId(UUID sessionId) {
+        SessionSnapshotDto snapshot = schedulerService.tick(sessionId);
+        UserTaskDto task = snapshot.currentUserTask;
+        return task == null ? null : task.stepId;
+    }
+
+    private boolean containsAny(String haystack, String... needles) {
+        for (String n : needles) {
+            if (haystack.contains(n)) return true;
+        }
+        return false;
+    }
+
+    private int extractFirstNumber(String text, int fallback) {
+        if (text == null) return fallback;
+        Matcher m = DIGITS.matcher(text);
+        if (m.find()) {
+            try {
+                return Integer.parseInt(m.group(1));
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        return fallback;
+    }
+
+    private UUID extractSessionId(WebSocketSession session) {
+        URI uri = session.getUri();
+        if (uri == null || uri.getQuery() == null) return null;
+        for (String param : uri.getQuery().split("&")) {
+            String[] kv = param.split("=", 2);
+            if (kv.length == 2 && kv[0].equals("sessionId")) {
+                try {
+                    return UUID.fromString(kv[1]);
+                } catch (IllegalArgumentException ignored) {
+                    return null;
+                }
+            }
+        }
+        return null;
+    }
+
+    /** Sends a spoken prompt: text + Base64 TTS audio in one message, so the app can just play it. */
+    private void sendPrompt(WebSocketSession session, String field, String message) throws Exception {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("field", field);
+        data.put("message", message);
+        String audioBase64 = textToSpeechService.synthesizeBase64(message);
+        if (audioBase64 != null) {
+            data.put("audioBase64", audioBase64);
+            data.put("audioEncoding", "MP3");
+        }
+        send(session, "prompt", data);
+    }
+
+    private void send(WebSocketSession session, String type, Object data) throws Exception {
+        String payload = objectMapper.writeValueAsString(Map.of("type", type, "data", data));
+        if (session.isOpen()) {
+            synchronized (session) {
+                session.sendMessage(new TextMessage(payload));
+            }
+        }
+    }
+}
