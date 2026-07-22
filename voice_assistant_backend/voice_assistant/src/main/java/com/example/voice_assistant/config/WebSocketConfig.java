@@ -1,6 +1,7 @@
 package com.example.voice_assistant.config;
 
 import com.example.voice_assistant.security.JwtHandshakeInterceptor;
+import com.example.voice_assistant.service.VoiceCommandService;
 import com.example.voice_assistant.security.JwtService;
 import com.example.voice_assistant.service.CookingSessionService;
 import com.example.voice_assistant.service.RecipeService;
@@ -28,10 +29,13 @@ public class WebSocketConfig implements WebSocketConfigurer {
     private final ObjectMapper objectMapper;
     private final JwtService jwtService;
 
+    private final VoiceCommandService voiceCommandService;
+
     public WebSocketConfig(SpeechToTextService speechToTextService, TextToSpeechService textToSpeechService,
-                            RecipeService recipeService, CookingSessionService cookingSessionService,
-                            SchedulerService schedulerService, WebSocketSessionRegistry registry,
-                            ObjectMapper objectMapper, JwtService jwtService) {
+                           RecipeService recipeService, CookingSessionService cookingSessionService,
+                           SchedulerService schedulerService, WebSocketSessionRegistry registry,
+                           ObjectMapper objectMapper, JwtService jwtService,
+                           VoiceCommandService voiceCommandService) { // ADD param
         this.speechToTextService = speechToTextService;
         this.textToSpeechService = textToSpeechService;
         this.recipeService = recipeService;
@@ -40,6 +44,12 @@ public class WebSocketConfig implements WebSocketConfigurer {
         this.registry = registry;
         this.objectMapper = objectMapper;
         this.jwtService = jwtService;
+        this.voiceCommandService = voiceCommandService; // ADD
+    }
+
+    private AudioStreamWebSocketHandler audioStreamWebSocketHandler() {
+        return new AudioStreamWebSocketHandler(speechToTextService, textToSpeechService, recipeService,
+                cookingSessionService, schedulerService, registry, objectMapper, voiceCommandService); // ADD arg
     }
 
     @Override
@@ -51,8 +61,4 @@ public class WebSocketConfig implements WebSocketConfigurer {
                 .setAllowedOrigins("*");
     }
 
-    private AudioStreamWebSocketHandler audioStreamWebSocketHandler() {
-        return new AudioStreamWebSocketHandler(speechToTextService, textToSpeechService, recipeService,
-                cookingSessionService, schedulerService, registry, objectMapper);
-    }
 }

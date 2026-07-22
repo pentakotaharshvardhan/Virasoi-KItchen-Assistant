@@ -76,6 +76,7 @@ public class CookingSessionService {
             sds.setStepType(rs.getStepType());
             sds.setRequiresTimer(rs.isRequiresTimer());
             sds.setTimerSeconds(scaleTimer(rs.getBaseTimerSeconds(), rs.isScalesWithServes(), servesRequested));
+            sds.setIngredient(rs.getIngredient()); // ADD
             dish.addStep(sds);
         }
 

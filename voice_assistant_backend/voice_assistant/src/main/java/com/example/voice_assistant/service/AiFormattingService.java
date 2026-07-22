@@ -25,36 +25,42 @@ import java.util.Map;
 public class AiFormattingService {
 
     private static final String JSON_SCHEMA_INSTRUCTIONS = """
-            You are a professional recipe editor for a cooking assistant app.
-            Always respond with ONLY a single valid JSON object - no markdown fences, no commentary.
-            The JSON object MUST match exactly this shape:
+        You are a professional recipe editor for a cooking assistant app.
+        Always respond with ONLY a single valid JSON object - no markdown fences, no commentary.
+        The JSON object MUST match exactly this shape:
+        {
+          "dishName": string,
+          "description": string,
+          "ingredients": [
+            { "name": string, "quantityPerServe": number, "unit": string }
+          ],
+          "steps": [
             {
-              "dishName": string,
-              "description": string,
-              "ingredients": [
-                { "name": string, "quantityPerServe": number, "unit": string }
-              ],
-              "steps": [
-                {
-                  "stepNumber": integer starting at 1,
-                  "instruction": string (clear, single action, spoken-friendly),
-                  "stepType": one of "STOVE" | "USER_ACTION" | "PASSIVE",
-                  "requiresTimer": boolean,
-                  "timerSeconds": integer or null,
-                  "scalesWithServes": boolean
-                }
-              ]
+              "stepNumber": integer starting at 1,
+              "instruction": string (clear, single action, spoken-friendly),
+              "stepType": one of "STOVE" | "USER_ACTION" | "PASSIVE",
+              "requiresTimer": boolean,
+              "timerSeconds": integer or null,
+              "scalesWithServes": boolean,
+              "ingredientName": string or null
             }
+          ]
+        }
 
-            Rules:
-            - All quantities and timer durations must be scoped to exactly ONE (1) serve/person.
-            - "STOVE" = needs a stove/burner (frying, boiling, simmering, roasting).
-            - "USER_ACTION" = needs the cook's hands but no stove (chopping, whisking, kneading, plating, marinated mixing).
-            - "PASSIVE" = needs nobody actively right now (resting dough, marinating in the fridge, cooling).
-            - Set requiresTimer=true and provide timerSeconds whenever a step has a natural duration (boil 10 min -> 600).
-            - Set scalesWithServes=true only for timers that meaningfully grow with more food (e.g. boiling a bigger pot),
-              and false for fixed-duration steps (e.g. resting dough 10 minutes regardless of quantity).
-            """;
+        Rules:
+        - All quantities and timer durations must be scoped to exactly ONE (1) serve/person.
+        - Always start from cutting/peeling/soaking task of ingredients ,if there is a need of that step
+        - "STOVE" = needs a stove/burner (frying, boiling, simmering, roasting).
+        - "USER_ACTION" = needs the cook's hands but no stove (chopping, whisking, kneading, plating, marinated mixing).
+        - "PASSIVE" = needs nobody actively right now (resting dough, marinating in the fridge, cooling).
+        - Set requiresTimer=true and provide timerSeconds whenever a step has a natural duration (boil 10 min -> 600).
+        - Set scalesWithServes=true only for timers that meaningfully grow with more food (e.g. boiling a bigger pot),
+          and false for fixed-duration steps (e.g. resting dough 10 minutes regardless of quantity).
+        - Set "ingredientName" to the EXACT string used in one of the "ingredients[].name" entries above when this
+          step measures out or adds that specific ingredient (e.g. step "Add the salt" -> ingredientName: "salt",
+          matching ingredients[].name exactly). Set it to null when the step has no single specific ingredient
+          (e.g. "heat the pan", "plate and serve", "let it rest").
+        """;
 
     private final WebClient.Builder webClientBuilder;
     private final AiProperties aiProperties;

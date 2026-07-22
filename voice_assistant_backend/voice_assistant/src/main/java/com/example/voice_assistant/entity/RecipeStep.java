@@ -1,5 +1,6 @@
 package com.example.voice_assistant.entity;
 
+
 import com.example.voice_assistant.entity.enums.StepType;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
@@ -27,11 +28,8 @@ public class RecipeStep {
     @Column(name = "requires_timer", nullable = false)
     private boolean requiresTimer;
 
-    /** Timer length in seconds for 1 serve (baseServes). Null when requiresTimer is false. */
-    @Column(name = "base_timer_seconds")
     private Integer baseTimerSeconds;
 
-    /** Whether this step's timer should grow when cooking for more people (e.g. boiling more rice takes longer). */
     @Column(name = "scales_with_serves", nullable = false)
     private boolean scalesWithServes = false;
 
@@ -39,6 +37,13 @@ public class RecipeStep {
     @JoinColumn(name = "recipe_id")
     @JsonIgnore
     private Recipe recipe;
+
+    /** Which ingredient (if any) this step measures out - set by RecipeService when parsing the
+     *  AI's ingredientName tag. Nullable: most steps don't correspond to exactly one ingredient. */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "ingredient_id")
+    @JsonIgnore
+    private RecipeIngredient ingredient; // ADD
 
     public RecipeStep() {
     }
@@ -59,4 +64,6 @@ public class RecipeStep {
     public void setScalesWithServes(boolean scalesWithServes) { this.scalesWithServes = scalesWithServes; }
     public Recipe getRecipe() { return recipe; }
     public void setRecipe(Recipe recipe) { this.recipe = recipe; }
+    public RecipeIngredient getIngredient() { return ingredient; } // ADD
+    public void setIngredient(RecipeIngredient ingredient) { this.ingredient = ingredient; } // ADD
 }

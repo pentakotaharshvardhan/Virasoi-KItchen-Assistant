@@ -12,6 +12,8 @@ import com.example.voice_assistant.exception.ResourceNotFoundException;
 import com.example.voice_assistant.repository.RecipeRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -88,6 +90,11 @@ public class RecipeService {
             recipe.addIngredient(new RecipeIngredient(i.name, BigDecimal.valueOf(i.quantityPerServe), i.unit));
         }
 
+        // Lookup so steps can be linked to the ingredient they measure out (case/whitespace-insensitive,
+        // reusing the same normalize() used for dish names). ADD this block.
+        Map<String, RecipeIngredient> ingredientsByName = recipe.getIngredients().stream()
+                .collect(Collectors.toMap(ri -> normalize(ri.getName()), ri -> ri, (a, b) -> a));
+
         recipe.getSteps().clear();
         for (AiStepDto s : ai.steps) {
             RecipeStep step = new RecipeStep();
@@ -97,6 +104,9 @@ public class RecipeService {
             step.setRequiresTimer(s.requiresTimer);
             step.setBaseTimerSeconds(s.timerSeconds);
             step.setScalesWithServes(s.scalesWithServes);
+            if (s.ingredientName != null && !s.ingredientName.isBlank()) {   // ADD
+                step.setIngredient(ingredientsByName.get(normalize(s.ingredientName))); // ADD
+            }
             recipe.addStep(step);
         }
 

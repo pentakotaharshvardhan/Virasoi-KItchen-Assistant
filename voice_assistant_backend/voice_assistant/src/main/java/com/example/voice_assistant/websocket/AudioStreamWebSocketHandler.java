@@ -1,6 +1,7 @@
 package com.example.voice_assistant.websocket;
 
 import com.example.voice_assistant.dto.response.SessionSnapshotDto;
+import com.example.voice_assistant.service.VoiceCommandService;
 import com.example.voice_assistant.dto.response.UserTaskDto;
 import com.example.voice_assistant.entity.CookingSession;
 import com.example.voice_assistant.entity.Recipe;
@@ -54,17 +55,19 @@ public class AudioStreamWebSocketHandler extends TextWebSocketHandler {
     private final SchedulerService schedulerService;
     private final WebSocketSessionRegistry registry;
     private final ObjectMapper objectMapper;
+    private final VoiceCommandService voiceCommandService; // ADD
 
     // per-socket scratch state
     private final Map<String, ByteArrayOutputStream> buffers = new ConcurrentHashMap<>();
     private final Map<String, String> pendingField = new ConcurrentHashMap<>();
     private final Map<String, Map<String, Object>> pendingMeta = new ConcurrentHashMap<>();
     private final Map<String, String> pendingDishName = new ConcurrentHashMap<>();
+    private final Map<String, String> lastSpokenMessage = new ConcurrentHashMap<>(); // ADD - for REPEAT
 
     public AudioStreamWebSocketHandler(SpeechToTextService speechToTextService, TextToSpeechService textToSpeechService,
-                                        RecipeService recipeService, CookingSessionService cookingSessionService,
-                                        SchedulerService schedulerService, WebSocketSessionRegistry registry,
-                                        ObjectMapper objectMapper) {
+                                       RecipeService recipeService, CookingSessionService cookingSessionService,
+                                       SchedulerService schedulerService, WebSocketSessionRegistry registry,
+                                       ObjectMapper objectMapper, VoiceCommandService voiceCommandService) { // ADD param
         this.speechToTextService = speechToTextService;
         this.textToSpeechService = textToSpeechService;
         this.recipeService = recipeService;
@@ -72,6 +75,7 @@ public class AudioStreamWebSocketHandler extends TextWebSocketHandler {
         this.schedulerService = schedulerService;
         this.registry = registry;
         this.objectMapper = objectMapper;
+        this.voiceCommandService = voiceCommandService; // ADD
     }
 
     @Override
@@ -90,6 +94,7 @@ public class AudioStreamWebSocketHandler extends TextWebSocketHandler {
         pendingField.remove(session.getId());
         pendingMeta.remove(session.getId());
         pendingDishName.remove(session.getId());
+        lastSpokenMessage.remove(session.getId()); // ADD
         UUID cookingSessionId = extractSessionId(session);
         if (cookingSessionId != null) {
             registry.unregister(cookingSessionId, session);
@@ -187,7 +192,6 @@ public class AudioStreamWebSocketHandler extends TextWebSocketHandler {
     }
 
     private void handleStepCommand(WebSocketSession session, UUID sessionId, String transcript, Map<String, Object> meta) throws Exception {
-        String lower = transcript.toLowerCase();
         UUID stepId = meta.get("stepId") != null ? UUID.fromString(meta.get("stepId").toString()) : currentUserTaskStepId(sessionId);
 
         if (stepId == null) {
@@ -195,20 +199,37 @@ public class AudioStreamWebSocketHandler extends TextWebSocketHandler {
             return;
         }
 
+        // Gemini-based classification replaces the old containsAny(...) keyword matching - handles
+        // paraphrased/noisy STT output ("yeah I'm good, next one") reliably.
+        VoiceCommandService.Command command = voiceCommandService.classify(transcript);
+
         SessionSnapshotDto snapshot;
-        if (containsAny(lower, "done", "next", "finished", "complete", "go ahead", "go to next")) {
-            snapshot = schedulerService.completeStep(sessionId, stepId);
-        } else if (containsAny(lower, "wait", "not yet", "hold on", "give me a minute")) {
-            snapshot = schedulerService.waitOnStep(sessionId, stepId);
-        } else if (containsAny(lower, "yes")) {
-            int seconds = extractFirstNumber(transcript, 180); // default 3 minutes if no number heard
-            snapshot = schedulerService.startOptionalTimer(sessionId, stepId, seconds);
-        } else if (containsAny(lower, "no")) {
-            snapshot = schedulerService.tick(sessionId);
-        } else {
-            send(session, "error", Map.of("message", "Didn't understand step command: \"" + transcript + "\""));
-            return;
+        switch (command) {
+            case NEXT -> snapshot = schedulerService.completeStep(sessionId, stepId);
+            case WAIT -> snapshot = schedulerService.waitOnStep(sessionId, stepId);
+            case TIMER_YES -> {
+                int seconds = extractFirstNumber(transcript, 180); // default 3 minutes if no number heard
+                snapshot = schedulerService.startOptionalTimer(sessionId, stepId, seconds);
+            }
+            case TIMER_NO -> snapshot = schedulerService.tick(sessionId);
+            case REPEAT -> {
+                String last = lastSpokenMessage.getOrDefault(session.getId(), "Nothing to repeat yet.");
+                sendPrompt(session, "step_command", last);
+                return; // no state change, nothing new to broadcast
+            }
+            case STOP -> {
+                send(session, "info", Map.of("message", "Okay, pausing here. Say \"next\" whenever you're ready to continue."));
+                return;
+            }
+            default -> {
+                send(session, "error", Map.of("message", "Didn't understand step command: \"" + transcript + "\""));
+                return;
+            }
         }
+
+        // snapshot.message / snapshot.messageAudioBase64 are already personalized + synthesized by
+        // NotificationService.pushSnapshot() inside the scheduler call above - nothing more to do here.
+        lastSpokenMessage.put(session.getId(), snapshot.message);
         send(session, "session_snapshot", snapshot);
     }
 

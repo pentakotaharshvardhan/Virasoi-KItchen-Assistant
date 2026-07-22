@@ -4,13 +4,10 @@ import com.example.voice_assistant.entity.enums.StepStatus;
 import com.example.voice_assistant.entity.enums.StepType;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
-import com.fasterxml.jackson.databind.annotation.JsonSerialize;
-import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
 
 import java.time.Instant;
 import java.util.UUID;
 
-/** A per-session, per-dish, servings-scaled instance of a RecipeStep. This is what the scheduler actually moves around. */
 @Entity
 @Table(name = "session_dish_steps")
 public class SessionDishStep {
@@ -37,7 +34,6 @@ public class SessionDishStep {
     @Column(name = "requires_timer", nullable = false)
     private boolean requiresTimer;
 
-    /** Timer length in seconds, already scaled for this dish's servesRequested. */
     @Column(name = "timer_seconds")
     private Integer timerSeconds;
 
@@ -45,17 +41,22 @@ public class SessionDishStep {
     @Column(nullable = false)
     private StepStatus status = StepStatus.PENDING;
 
-    /** Which stove (1-based index) this step was assigned to, if stepType == STOVE and it's in progress. */
     @Column(name = "assigned_stove_index")
     private Integer assignedStoveIndex;
 
     @Column(name = "timer_start_at")
-    @JsonSerialize(using = ToStringSerializer.class)
     private Instant timerStartAt;
 
     @Column(name = "timer_end_at")
-    @JsonSerialize(using = ToStringSerializer.class)
     private Instant timerEndAt;
+
+    /** Copied from the source RecipeStep when the dish is added to a session - see
+     *  CookingSessionService.addDish(). Used by NotificationService to compute real
+     *  quantity-per-serve text; never exposed in JSON (see class-level note above). */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "ingredient_id")
+    @JsonIgnore
+    private RecipeIngredient ingredient; // ADD
 
     public SessionDishStep() {
     }
@@ -82,4 +83,6 @@ public class SessionDishStep {
     public void setTimerStartAt(Instant timerStartAt) { this.timerStartAt = timerStartAt; }
     public Instant getTimerEndAt() { return timerEndAt; }
     public void setTimerEndAt(Instant timerEndAt) { this.timerEndAt = timerEndAt; }
+    public RecipeIngredient getIngredient() { return ingredient; } // ADD
+    public void setIngredient(RecipeIngredient ingredient) { this.ingredient = ingredient; } // ADD
 }
