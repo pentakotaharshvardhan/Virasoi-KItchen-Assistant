@@ -1,5 +1,5 @@
 package com.example.voice_assistant.websocket;
-
+import com.example.voice_assistant.dto.ai.VoiceCommandResultDto;
 import com.example.voice_assistant.dto.response.SessionSnapshotDto;
 import com.example.voice_assistant.service.VoiceCommandService;
 import com.example.voice_assistant.dto.response.UserTaskDto;
@@ -192,30 +192,60 @@ public class AudioStreamWebSocketHandler extends TextWebSocketHandler {
     }
 
     private void handleStepCommand(WebSocketSession session, UUID sessionId, String transcript, Map<String, Object> meta) throws Exception {
-        UUID stepId = meta.get("stepId") != null ? UUID.fromString(meta.get("stepId").toString()) : currentUserTaskStepId(sessionId);
+        VoiceCommandResultDto parsed = voiceCommandService.classify(transcript);
+        VoiceCommandService.Command command;
+        try {
+            command = VoiceCommandService.Command.valueOf(parsed.command);
+        } catch (Exception e) {
+            command = VoiceCommandService.Command.UNKNOWN;
+        }
 
-        if (stepId == null) {
-            send(session, "error", Map.of("message", "No active step to act on right now."));
+        // HELP and REMOVE don't touch scheduler state - handle immediately.
+        if (command == VoiceCommandService.Command.HELP) {
+            String answer = (parsed.helpResponse != null && !parsed.helpResponse.isBlank())
+                    ? parsed.helpResponse
+                    : "I'm here to help - what would you like to know about the app?";
+            sendPrompt(session, "help", answer);
+            return;
+        }
+        if (command == VoiceCommandService.Command.REMOVE) {
+            // No server-tracked pantry list exists - this is a client-side concern. Echo back what
+            // was understood so the Flutter Ingredient screen can remove it from its local list.
+            send(session, "remove_ingredient", Map.of("ingredientName", parsed.ingredientName == null ? "" : parsed.ingredientName));
             return;
         }
 
-        // Gemini-based classification replaces the old containsAny(...) keyword matching - handles
-        // paraphrased/noisy STT output ("yeah I'm good, next one") reliably.
-        VoiceCommandService.Command command = voiceCommandService.classify(transcript);
+        // Resolve which step this applies to: an explicit stove number or dish name (needed when
+        // more than one might be waiting on the user at once) takes priority over the scheduler's
+        // single implicit "current task" guess.
+        UUID stepId = null;
+        if (parsed.stoveIndex != null) {
+            stepId = schedulerService.findStepIdForStove(sessionId, parsed.stoveIndex).orElse(null);
+        }
+        if (stepId == null && parsed.dishName != null && !parsed.dishName.isBlank()) {
+            stepId = schedulerService.findActiveStepIdForDish(sessionId, parsed.dishName).orElse(null);
+        }
+        if (stepId == null) {
+            stepId = meta.get("stepId") != null ? UUID.fromString(meta.get("stepId").toString()) : currentUserTaskStepId(sessionId);
+        }
+        if (stepId == null) {
+            send(session, "error", Map.of("message", "I couldn't tell which step you mean - try naming the stove number or dish."));
+            return;
+        }
 
         SessionSnapshotDto snapshot;
         switch (command) {
             case NEXT -> snapshot = schedulerService.completeStep(sessionId, stepId);
             case WAIT -> snapshot = schedulerService.waitOnStep(sessionId, stepId);
             case TIMER_YES -> {
-                int seconds = extractFirstNumber(transcript, 180); // default 3 minutes if no number heard
+                int seconds = parsed.timerSeconds != null ? parsed.timerSeconds : extractFirstNumber(transcript, 180);
                 snapshot = schedulerService.startOptionalTimer(sessionId, stepId, seconds);
             }
             case TIMER_NO -> snapshot = schedulerService.tick(sessionId);
             case REPEAT -> {
                 String last = lastSpokenMessage.getOrDefault(session.getId(), "Nothing to repeat yet.");
                 sendPrompt(session, "step_command", last);
-                return; // no state change, nothing new to broadcast
+                return;
             }
             case STOP -> {
                 send(session, "info", Map.of("message", "Okay, pausing here. Say \"next\" whenever you're ready to continue."));
@@ -227,8 +257,6 @@ public class AudioStreamWebSocketHandler extends TextWebSocketHandler {
             }
         }
 
-        // snapshot.message / snapshot.messageAudioBase64 are already personalized + synthesized by
-        // NotificationService.pushSnapshot() inside the scheduler call above - nothing more to do here.
         lastSpokenMessage.put(session.getId(), snapshot.message);
         send(session, "session_snapshot", snapshot);
     }

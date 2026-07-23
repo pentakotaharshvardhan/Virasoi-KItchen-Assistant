@@ -1,23 +1,19 @@
 package com.example.voice_assistant.controller;
 
-
+import com.example.voice_assistant.dto.ai.VoiceCommandResultDto;
 import com.example.voice_assistant.service.InstructionPersonalizationService;
 import com.example.voice_assistant.service.VoiceCommandService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.Map;
 
-/**
- * Small AI-utility endpoints used by the voice pipeline. Both are stateless - nothing here is
- * persisted. The websocket handler calls VoiceCommandService directly (no HTTP round-trip);
- * these REST routes exist for the Flutter app's non-voice UI, debugging, and Postman testing.
- * Requires a valid JWT like every other non-/api/auth endpoint (see SecurityConfig).
- */
 @RestController
 public class AiAssistController {
 
@@ -30,10 +26,12 @@ public class AiAssistController {
         this.instructionPersonalizationService = instructionPersonalizationService;
     }
 
+    /** Classifies a transcript into command + stove/dish/ingredient/timer parameters. Used
+     *  directly by the Ingredient screen (on-device STT -> POST here -> act on "REMOVE"
+     *  locally); the live-session websocket calls VoiceCommandService directly instead. */
     @PostMapping("/api/ai/command")
-    public Map<String, String> classifyCommand(@Valid @RequestBody ClassifyCommandRequest request) {
-        VoiceCommandService.Command command = voiceCommandService.classify(request.transcript);
-        return Map.of("command", command.name());
+    public VoiceCommandResultDto classifyCommand(@Valid @RequestBody ClassifyCommandRequest request) {
+        return voiceCommandService.classify(request.transcript);
     }
 
     @PostMapping("/api/ai/personalize-instruction")
@@ -46,7 +44,20 @@ public class AiAssistController {
                 request.servesRequested == null ? 1 : request.servesRequested,
                 request.stoveIndex
         );
-        return Map.of("text", text); // ephemeral - returned for immediate TTS use, never stored
+        return Map.of("text", text);
+    }
+
+    /** Dedicated Q&A for the standalone Help screen - always answers directly, no classification. */
+    @PostMapping("/api/ai/help")
+    public Map<String, String> help(@Valid @RequestBody HelpQuestionRequest request) {
+        return Map.of("answer", voiceCommandService.answerHelpQuestion(request.question));
+    }
+
+    /** Reference list of example phrases per command, so the Help screen can show users exactly
+     *  what to say instead of hardcoding a second copy of the list in Flutter. */
+    @GetMapping("/api/ai/help/commands")
+    public List<VoiceCommandService.CommandExample> commandReference() {
+        return VoiceCommandService.CANONICAL_EXAMPLES;
     }
 
     public static class ClassifyCommandRequest {
@@ -63,4 +74,10 @@ public class AiAssistController {
         public Integer servesRequested;
         public Integer stoveIndex;
     }
+
+    public static class HelpQuestionRequest {
+        @NotBlank
+        public String question;
+    }
 }
+

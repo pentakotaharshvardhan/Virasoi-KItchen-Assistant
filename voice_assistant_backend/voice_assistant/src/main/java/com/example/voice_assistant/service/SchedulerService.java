@@ -75,6 +75,33 @@ public class SchedulerService {
         return snapshot;
     }
 
+    /** Resolves which step is currently occupying a given stove, if any. Lets the user say
+     *  "stove 1 is free" instead of relying on the single implicit currentUserTask when multiple
+     *  stoves might have simultaneous waiting timers. */
+    public Optional<UUID> findStepIdForStove(UUID sessionId, int stoveIndex) {
+        CookingSession session = loadSession(sessionId);
+        return session.getStoves().stream()
+                .filter(s -> s.getStoveIndex() == stoveIndex)
+                .findFirst()
+                .map(StoveResource::getOccupiedByStepId);
+    }
+
+    /** Resolves the currently-active step for a named dish (fuzzy, case-insensitive contains match),
+     *  so the user can say "the paneer is done" instead of only ever addressing one implicit task. */
+    public Optional<UUID> findActiveStepIdForDish(UUID sessionId, String dishNameQuery) {
+        if (dishNameQuery == null || dishNameQuery.isBlank()) return Optional.empty();
+        CookingSession session = loadSession(sessionId);
+        String normalized = dishNameQuery.trim().toLowerCase();
+        return session.getDishes().stream()
+                .filter(d -> d.getDishName() != null && d.getDishName().toLowerCase().contains(normalized))
+                .flatMap(d -> d.getSteps().stream())
+                .filter(s -> s.getStatus() == StepStatus.IN_PROGRESS
+                        || s.getStatus() == StepStatus.TIMER_RUNNING
+                        || s.getStatus() == StepStatus.TIMER_COMPLETED_AWAITING_USER)
+                .map(SessionDishStep::getId)
+                .findFirst();
+    }
+
     /** One dispatch pass across all active dishes. Returns true if anything changed (so tick() can loop). */
     private boolean dispatchOnce(CookingSession session) {
         boolean userBusy = isUserBusy(session);

@@ -1,5 +1,6 @@
 package com.example.voice_assistant.service;
 
+import com.example.voice_assistant.dto.ai.VoiceCommandResultDto;
 import com.example.voice_assistant.properties.AiProperties;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -11,33 +12,172 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * Classifies a raw voice transcript into exactly ONE command word using Gemini's lightweight
- * `gemini-3.1-flash-lite` model. Replaces naive keyword matching (transcript.contains("done"))
- * so paraphrased/noisy STT output ("okay I'm done with that one") still routes correctly.
- *
- * Deliberately separate from AiFormattingService's recipe-generation calls: no JSON mode, no
- * schema, minimal tokens - this is on the hot path of every spoken command in a live session.
- */
 @Service
 public class VoiceCommandService {
 
-    private static final String CLASSIFIER_INSTRUCTION = """
-            You are a strict voice-command classifier for a hands-free cooking assistant.
-            Read the user's spoken sentence (it may be noisy speech-to-text output) and reply with
-            EXACTLY ONE WORD from this fixed list, in uppercase, nothing else - no punctuation,
-            no explanation, no quotes:
+    public enum Command { NEXT, WAIT, TIMER_YES, TIMER_NO, REPEAT, STOP, REMOVE, HELP, UNKNOWN }
 
-            NEXT      - user confirms current step is done / wants to move on ("done", "finished", "next", "go ahead")
-            WAIT      - user wants to hold before moving on ("wait", "not yet", "hold on", "give me a minute")
-            TIMER_YES - user wants a timer started ("yes", "sure", "start a timer", "yes 5 minutes")
-            TIMER_NO  - user declines a timer ("no", "no thanks", "skip it")
-            REPEAT    - user wants the last instruction repeated ("repeat", "say that again", "what did you say")
-            STOP      - user wants to end/pause the session ("stop", "cancel", "end session", "pause everything")
-            UNKNOWN   - anything that doesn't clearly match one of the above
+    public record CommandExample(String phrase, String command, String note) {}
 
-            Reply with only the single word.
+    /** Single source of truth for both the classifier's few-shot prompt AND
+     *  GET /api/ai/help/commands. Several phrasings per command on purpose - more few-shot
+     *  variety helps the classifier, and a richer reference helps users on the Help screen. */
+    public static final List<CommandExample> CANONICAL_EXAMPLES = List.of(
+            new CommandExample("next", "NEXT", "Marks your current task done and moves on."),
+            new CommandExample("I'm done", "NEXT", "Same as \"next\"."),
+            new CommandExample("that's finished", "NEXT", "Same as \"next\"."),
+            new CommandExample("now stove 1 is free", "NEXT",
+                    "Completes whatever was cooking on stove 1 specifically - use this when more than one stove is active and you need to say which one."),
+            new CommandExample("task on stove 2 is done", "NEXT", "Same idea, naming stove 2 instead."),
+            new CommandExample("the paneer is done", "NEXT", "Completes the active step for that specific dish by name."),
+
+            new CommandExample("wait", "WAIT", "Tells the assistant to hold before moving to the next step."),
+            new CommandExample("not yet", "WAIT", "Same as \"wait\"."),
+            new CommandExample("hold on a second", "WAIT", "Same as \"wait\"."),
+            new CommandExample("wait, I am still not done with the task on stove 2", "WAIT",
+                    "Specifies which stove you need more time on."),
+            new CommandExample("give me a few more minutes on the rice", "WAIT", "Specifies which dish you need more time on."),
+
+            new CommandExample("yes", "TIMER_YES", "Confirms starting a timer with the assistant's suggested duration."),
+            new CommandExample("yes, 5 minutes", "TIMER_YES", "Starts a timer for the stated duration."),
+            new CommandExample("sure, set it for 10 minutes", "TIMER_YES", "Same idea, longer duration."),
+
+            new CommandExample("no", "TIMER_NO", "Declines starting a timer."),
+            new CommandExample("no thanks", "TIMER_NO", "Same as \"no\"."),
+            new CommandExample("skip the timer", "TIMER_NO", "Same as \"no\"."),
+
+            new CommandExample("repeat", "REPEAT", "Repeats the last thing the assistant said."),
+            new CommandExample("say that again", "REPEAT", "Same as \"repeat\"."),
+            new CommandExample("what did you say", "REPEAT", "Same as \"repeat\"."),
+
+            new CommandExample("stop", "STOP", "Pauses the session."),
+            new CommandExample("cancel", "STOP", "Same as \"stop\"."),
+            new CommandExample("pause everything", "STOP", "Same as \"stop\"."),
+
+            new CommandExample("remove onions", "REMOVE",
+                    "Removes an item from your ingredient checklist (Ingredient screen only)."),
+            new CommandExample("I don't have tomatoes", "REMOVE", "Same intent, phrased as a statement instead of a command."),
+            new CommandExample("take garlic off the list", "REMOVE", "Same as \"remove garlic\"."),
+
+            new CommandExample("help", "HELP", "Opens general help about how the app works."),
+            new CommandExample("how do I start a timer", "HELP", "Ask about any specific feature, any time."),
+            new CommandExample("what do I say if two stoves finish at the same time", "HELP",
+                    "Ask specifically about disambiguation - the assistant will explain naming the stove/dish.")
+    );
+
+    private static final String APP_KNOWLEDGE = """
+            Virasoi Kitchen Assistant is a hands-free cooking app built around a "one cook, many
+            stoves" resource model, similar to how an operating system schedules tasks:
+
+            RECIPES
+            - A recipe can come from three places: freshly generated by AI for a dish name the
+              user asks for, reused instantly if that dish was already generated before ("find or
+              generate" - it checks first before asking the AI again), or transcribed from a
+              user's own spoken family/ancestor recipe instead of AI-invented.
+            - Every recipe has ingredients (each with a quantity needed per ONE serving) and an
+              ordered list of steps.
+
+            STEP TYPES - every step is exactly one of:
+            - STOVE: needs a stove/burner (frying, boiling, simmering, roasting). Multiple STOVE
+              steps from different dishes can run truly in parallel, one per stove.
+            - USER_ACTION: needs the cook's own hands but no stove (chopping, whisking, kneading,
+              plating). Only ONE of these can be active across the whole session at a time - there's
+              only one cook - so the assistant always gives exactly one hands-on task at a time.
+            - PASSIVE: needs nobody actively right now (resting dough, marinating, cooling) and
+              just runs in the background.
+
+            SESSIONS AND SCHEDULING
+            - A "session" is one cooking sitting: the user says how many stoves they have and adds
+              one or more dishes (each with its own servings count) to it.
+            - The assistant dispatches steps fairly, in the order dishes were added, to whichever
+              stove is free - so it never double-books a stove, and it fills otherwise-idle time
+              (e.g. asks you to chop something for dish B while dish A simmers unattended).
+
+            TIMERS
+            - Some steps have a timer built into the recipe and start counting down automatically
+              the moment the step begins.
+            - Other times, after finishing a hands-on task, the assistant may ask if you want a
+              timer for it - answering starts or skips one.
+            - When any timer finishes, the assistant asks whether to move to the next step or wait
+              a bit longer before deciding.
+
+            INGREDIENTS SCREEN
+            - Before cooking starts, an Ingredient screen lists everything needed for the session's
+              dish(es). Saying an ingredient's name here checks it off the list (as already
+              on-hand) - this only applies before cooking starts, not during active cooking.
+
+            DISAMBIGUATION - the one thing that trips people up
+            - Because multiple stoves can be active at once, if the assistant seems confused about
+              which task you mean, name the stove number or the dish by name in your sentence -
+              e.g. "stove 1 is free" or "the rice is done" instead of just "done". USER_ACTION
+              tasks never need this since there's only ever one at a time.
             """;
+
+    private static String buildExamplesBlock() {
+        StringBuilder sb = new StringBuilder();
+        for (CommandExample ex : CANONICAL_EXAMPLES) {
+            sb.append("- \"").append(ex.phrase()).append("\" -> ").append(ex.command())
+                    .append(" (").append(ex.note()).append(")\n");
+        }
+        return sb.toString();
+    }
+
+    private static final String CLASSIFIER_INSTRUCTION = """
+            You are a strict voice-command classifier AND parameter extractor for a hands-free
+            cooking assistant. Read the user's spoken sentence (it may be noisy speech-to-text
+            output) and respond with ONLY a single valid JSON object - no markdown fences, no
+            commentary - matching exactly this shape:
+            {
+              "command": one of "NEXT" | "WAIT" | "TIMER_YES" | "TIMER_NO" | "REPEAT" | "STOP" | "REMOVE" | "HELP" | "UNKNOWN",
+              "stoveIndex": integer or null,
+              "dishName": string or null,
+              "ingredientName": string or null,
+              "timerSeconds": integer or null,
+              "helpResponse": string or null
+            }
+
+            Command meanings:
+            - NEXT: user confirms a task/step is done and wants to move on.
+            - WAIT: user wants to hold before moving on.
+            - TIMER_YES: user wants a timer started (extract a spoken duration into timerSeconds if given, e.g. "5 minutes" -> 300).
+            - TIMER_NO: user declines a timer.
+            - REPEAT: user wants the last instruction repeated.
+            - STOP: user wants to end/pause the session.
+            - REMOVE: user wants an ingredient taken off their checklist (Ingredient screen only) - extract the item into ingredientName.
+            - HELP: user is asking a question about how the app works (not giving a cooking command).
+              Answer it yourself in helpResponse using this knowledge, and WHENEVER the question is
+              "how do I..." or "what do I say to...", you MUST include at least one concrete example
+              sentence quoted directly from the examples list below (or a natural paraphrase of one):
+              %s
+            - UNKNOWN: anything that doesn't clearly match one of the above.
+
+            Extraction rules:
+            - stoveIndex: set ONLY if the user explicitly names a stove/burner number (e.g. "stove 1", "burner two" -> 2). Otherwise null.
+            - dishName: set ONLY if the user names a specific dish (e.g. "the paneer", "the rice"). Otherwise null.
+            - ingredientName: set ONLY for REMOVE, the exact ingredient named. Otherwise null.
+            - timerSeconds: set ONLY for TIMER_YES when a duration is spoken; convert minutes to seconds. Otherwise null.
+            - helpResponse: set ONLY for HELP, a short friendly spoken-style answer (2-5 sentences), including a quoted example sentence whenever relevant.
+
+            Example phrases users are encouraged to say (not exhaustive - understand paraphrases too):
+            %s
+            """.formatted(APP_KNOWLEDGE, buildExamplesBlock());
+
+    private static final String HELP_ONLY_INSTRUCTION = """
+            You are the in-app help assistant for Virasoi Kitchen Assistant, a hands-free cooking
+            app. Answer the user's question in a short, warm, conversational way (2-6 sentences),
+            using this knowledge of how the app works:
+            %s
+
+            Here are the exact phrases (or close paraphrases of them) that trigger each voice
+            command:
+            %s
+
+            IMPORTANT: whenever the user's question is about HOW to do something or WHAT to say,
+            you must include at least one concrete, quoted example sentence from the list above (or
+            a natural paraphrase of one) - don't just describe the feature abstractly, show them the
+            actual words to say. If the question isn't about the app, gently say you can only help
+            with how the app works and invite them to ask something about that instead.
+            """.formatted(APP_KNOWLEDGE, buildExamplesBlock());
 
     private final WebClient.Builder webClientBuilder;
     private final AiProperties aiProperties;
@@ -49,17 +189,56 @@ public class VoiceCommandService {
         this.objectMapper = objectMapper;
     }
 
-    public enum Command { NEXT, WAIT, TIMER_YES, TIMER_NO, REPEAT, STOP, UNKNOWN }
-
-    /** Never throws - any Gemini/parsing failure falls back to UNKNOWN so a live session never breaks. */
-    public Command classify(String transcript) {
-        if (transcript == null || transcript.isBlank()) return Command.UNKNOWN;
+    public VoiceCommandResultDto classify(String transcript) {
+        VoiceCommandResultDto fallback = new VoiceCommandResultDto();
+        fallback.command = Command.UNKNOWN.name();
+        if (transcript == null || transcript.isBlank()) return fallback;
 
         try {
             Map<String, Object> body = new LinkedHashMap<>();
             body.put("system_instruction", Map.of("parts", List.of(Map.of("text", CLASSIFIER_INSTRUCTION))));
             body.put("contents", List.of(Map.of("role", "user", "parts", List.of(Map.of("text", transcript)))));
-            body.put("generationConfig", Map.of("temperature", 0.0, "maxOutputTokens", 5));
+            body.put("generationConfig", Map.of(
+                    "temperature", 0.0,
+                    "responseMimeType", "application/json"
+            ));
+
+            WebClient client = webClientBuilder.baseUrl(aiProperties.getBaseUrl()).build();
+
+            String rawJson = client.post()
+                    .uri(uriBuilder -> uriBuilder
+                            .path("/models/{model}:generateContent")
+                            .queryParam("key", aiProperties.getApiKey())
+                            .build(aiProperties.getModel()))
+                    .header("Content-Type", "application/json")
+                    .bodyValue(body)
+                    .retrieve()
+                    .bodyToMono(String.class)
+                    .block(Duration.ofSeconds(Math.min(aiProperties.getTimeoutSeconds(), 10)));
+
+            JsonNode root = objectMapper.readTree(rawJson);
+            String content = root.path("candidates").path(0).path("content").path("parts").path(0).path("text").asText();
+            VoiceCommandResultDto parsed = objectMapper.readValue(content, VoiceCommandResultDto.class);
+            try {
+                Command.valueOf(parsed.command);
+            } catch (Exception e) {
+                parsed.command = Command.UNKNOWN.name();
+            }
+            return parsed;
+        } catch (Exception e) {
+            return fallback;
+        }
+    }
+
+    public String answerHelpQuestion(String question) {
+        if (question == null || question.isBlank()) {
+            return "Ask me anything about how the app works!";
+        }
+        try {
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("system_instruction", Map.of("parts", List.of(Map.of("text", HELP_ONLY_INSTRUCTION))));
+            body.put("contents", List.of(Map.of("role", "user", "parts", List.of(Map.of("text", question)))));
+            body.put("generationConfig", Map.of("temperature", 0.4, "maxOutputTokens", 260));
 
             WebClient client = webClientBuilder.baseUrl(aiProperties.getBaseUrl()).build();
 
@@ -76,10 +255,10 @@ public class VoiceCommandService {
 
             JsonNode root = objectMapper.readTree(rawJson);
             String text = root.path("candidates").path(0).path("content").path("parts").path(0).path("text").asText("");
-            String word = text.trim().replaceAll("[^A-Za-z_]", "").toUpperCase();
-            return Command.valueOf(word);
+            String cleaned = text.trim();
+            return cleaned.isEmpty() ? "Sorry, I couldn't come up with an answer just now - try asking again." : cleaned;
         } catch (Exception e) {
-            return Command.UNKNOWN;
+            return "Sorry, I couldn't come up with an answer just now - try asking again.";
         }
     }
 }
