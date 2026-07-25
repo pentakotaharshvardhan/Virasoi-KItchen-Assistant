@@ -4,6 +4,8 @@ import com.example.voice_assistant.entity.enums.StepStatus;
 import com.example.voice_assistant.entity.enums.StepType;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
+import org.hibernate.annotations.OnDelete;
+import org.hibernate.annotations.OnDeleteAction;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -55,6 +57,7 @@ public class SessionDishStep {
      *  quantity-per-serve text; never exposed in JSON (see class-level note above). */
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "ingredient_id")
+    @OnDelete(action = OnDeleteAction.SET_NULL)
     @JsonIgnore
     private RecipeIngredient ingredient; // ADD
 

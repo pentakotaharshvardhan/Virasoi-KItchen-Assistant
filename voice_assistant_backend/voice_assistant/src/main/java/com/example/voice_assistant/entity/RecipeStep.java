@@ -4,6 +4,8 @@ package com.example.voice_assistant.entity;
 import com.example.voice_assistant.entity.enums.StepType;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
+import org.hibernate.annotations.OnDelete;
+import org.hibernate.annotations.OnDeleteAction;
 
 import java.util.UUID;
 
@@ -42,6 +44,7 @@ public class RecipeStep {
      *  AI's ingredientName tag. Nullable: most steps don't correspond to exactly one ingredient. */
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "ingredient_id")
+    @OnDelete(action = OnDeleteAction.SET_NULL)
     @JsonIgnore
     private RecipeIngredient ingredient; // ADD
 
