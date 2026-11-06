@@ -21,6 +21,9 @@ class _IngredientPageState extends State<IngredientPage> {
   late final IngredientViewModel _vm;
   late final VoiceViewModel _voiceVm;
 
+  bool _navigating = false;
+  bool _handingOff = false;
+
   @override
   void initState() {
     super.initState();
@@ -33,7 +36,6 @@ class _IngredientPageState extends State<IngredientPage> {
       // Automatically start voice assistant in background for gathering
       if (_vm.sessionId != null) {
         await _voiceVm.init(_vm.sessionId);
-        _voiceVm.startListening();
       }
     });
   }
@@ -41,30 +43,63 @@ class _IngredientPageState extends State<IngredientPage> {
   @override
   void dispose() {
     _vm.removeListener(_onStateChanged);
+    // The cooking screen owns the mic after a hand-off; otherwise release it on the way out.
+    if (!_handingOff) {
+      _voiceVm.detach();
+    }
+    _vm.stopLiveSync();
     super.dispose();
   }
 
   void _onStateChanged() {
-    // Auto-transition when all ingredients are confirmed
-    if (_vm.isDoneConfirming && !_vm.isLoading && mounted) {
-      Future.delayed(const Duration(seconds: 1), () {
-        if (mounted && _vm.isDoneConfirming) {
-          Navigator.pushReplacementNamed(
-            context,
-            AppRoutes.voiceAssistant,
-            arguments: _vm.sessionId,
-          );
+    // Auto-transition when all ingredients are confirmed.
+    if (_navigating || _handingOff) return;
+    if (!_vm.isDoneConfirming || _vm.isLoading || _vm.errorMessage != null || !mounted) return;
+
+    _navigating = true;
+    Future.delayed(const Duration(milliseconds: 700), () async {
+      if (!mounted || !_vm.isDoneConfirming) {
+        _navigating = false;
+        return;
+      }
+
+      // Close our voice socket first so it doesn't speak the first cooking instruction; the
+      // cooking screen reconnects and asks for the current snapshot itself.
+      _handingOff = true;
+      await _voiceVm.detach();
+
+      final ok = await _vm.startCooking();
+      if (!mounted) return;
+
+      if (!ok) {
+        _handingOff = false;
+        _navigating = false;
+        if (_vm.errorMessage != null) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(_vm.errorMessage!)));
         }
-      });
-    }
+        return;
+      }
+
+      Navigator.pushReplacementNamed(
+        context,
+        AppRoutes.voiceAssistant,
+        arguments: _vm.sessionId,
+      );
+    });
   }
 
-  void _openHelpAssistant() {
-    Navigator.pushNamed(
-      context, 
-      AppRoutes.voiceAssistant, 
-      arguments: {'sessionId': _vm.sessionId, 'helpMode': true}
+  Future<void> _openHelpAssistant() async {
+    await _voiceVm.pause();
+    if (!mounted) return;
+    await Navigator.pushNamed(
+      context,
+      AppRoutes.voiceAssistant,
+      arguments: {'sessionId': _vm.sessionId, 'helpMode': true},
     );
+    // Let the helper route finish disposing (it detaches the shared voice VM) before restarting.
+    await Future.delayed(const Duration(milliseconds: 450));
+    if (!mounted) return;
+    await _voiceVm.init(_vm.sessionId);
   }
 
   @override

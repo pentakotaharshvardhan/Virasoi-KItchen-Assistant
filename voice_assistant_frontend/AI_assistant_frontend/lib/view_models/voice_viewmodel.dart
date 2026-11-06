@@ -37,24 +37,38 @@ class VoiceViewModel extends ChangeNotifier {
   Timer? _absoluteTimeoutTimer;
   String _lastLiveText = '';
 
+  /// False while the microphone is intentionally paused (e.g. the screen was left, or we're
+  /// handing off to another screen). Prevents a finishing TTS playback from auto-resuming the mic.
+  bool _active = false;
+
   Future<void> init(String? sid, {bool helpMode = false}) async {
     print("VoiceViewModel: Initializing (HelpMode: $helpMode, Session: $sid)");
+    // Tear down any previous socket/timers first so repeated init() calls (ingredient page ->
+    // cooking page, helper assistant and back) never leave a second listener running.
+    _ws?.dispose();
+    _ws = null;
+    _stabilityTimer?.cancel();
+    _absoluteTimeoutTimer?.cancel();
+
     isHelpMode = helpMode;
-    
-    // Use existing session ID or generate a fallback
     sessionId = sid ?? const Uuid().v4();
-    
+    liveTranscript = '';
+    _lastLiveText = '';
+    state = VoiceState.idle;
+    _active = true;
+    notifyListeners();
+
     // 1. Permissions & Setup
     await _voice.requestMicPermission();
     await _voice.initSpeech(onStatus: _handleSttStatus);
     await _voice.initTts();
-    
+
     // 2. WebSocket Connection (only for non-help mode if preferred, but safe to connect always)
     final token = await _storage.accessToken;
     _ws = _wsFactory(ApiConstants.wsVoiceAssistant(token ?? '', sessionId!), token);
     _ws!.connect();
     _ws!.messages.listen(_handleServerMessage);
-    
+
     // 3. Auto-start listening
     startListening();
   }
@@ -70,8 +84,9 @@ class VoiceViewModel extends ChangeNotifier {
   }
 
   Future<void> startListening() async {
+    _active = true;
     if (state == VoiceState.listening || state == VoiceState.speaking || state == VoiceState.thinking) return;
-    
+
     _startAbsoluteTimeout();
     await _startListeningInternal();
   }
@@ -134,6 +149,32 @@ class VoiceViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Stops the microphone but keeps the socket alive (used when opening the helper assistant so
+  /// the same session can be resumed when the user comes back).
+  Future<void> pause() async {
+    _active = false;
+    await stopListening();
+    if (state != VoiceState.idle) {
+      state = VoiceState.idle;
+      notifyListeners();
+    }
+  }
+
+  /// Stops listening AND closes the socket. Use when handing a session off to another screen
+  /// (e.g. Ingredients -> Cooking) so two sockets don't both speak the same instruction.
+  Future<void> detach() async {
+    await pause();
+    _ws?.dispose();
+    _ws = null;
+    sessionId = null;
+  }
+
+  /// Asks the backend to re-send the current session snapshot (which is then spoken).
+  void requestStatus() {
+    if (isHelpMode) return;
+    _ws?.send({'type': 'status'});
+  }
+
   void _sendUserText(String text) async {
     _stabilityTimer?.cancel();
     _lastLiveText = '';
@@ -167,10 +208,22 @@ class VoiceViewModel extends ChangeNotifier {
 
   void _handleServerMessage(Map<String, dynamic> msg) {
     print("WS RECEIVED FULL JSON: $msg");
+    if (!_active) return;
     final type = msg['type']?.toString();
     final data = msg['data'] as Map<String, dynamic>?;
 
     if (type == 'connected') {
+      return;
+    }
+
+    // 0. Session snapshots (pushed by the scheduler, or requested with {"type":"status"} when a
+    //    cooking screen opens). The spoken text lives under data.message.
+    if (type == 'session_snapshot') {
+      final text = data?['message']?.toString() ?? msg['message']?.toString() ?? '';
+      final audioBase64 = data?['messageAudioBase64']?.toString()
+          ?? msg['messageAudioBase64']?.toString()
+          ?? data?['audioBase64']?.toString();
+      if (text.isNotEmpty) _speak(text, audioBase64: audioBase64);
       return;
     }
 
@@ -196,7 +249,10 @@ class VoiceViewModel extends ChangeNotifier {
     // 2. Handle prompt messages (Common in HELP mode or direct prompts)
     if (type != 'error' && (type == 'prompt' || msg.containsKey('message'))) {
       final text = msg['message']?.toString() ?? data?['message']?.toString() ?? '';
-      final audioBase64 = msg['messageAudioBase64']?.toString() ?? data?['messageAudioBase64']?.toString();
+      final audioBase64 = msg['messageAudioBase64']?.toString()
+          ?? data?['messageAudioBase64']?.toString()
+          ?? msg['audioBase64']?.toString()
+          ?? data?['audioBase64']?.toString();
       if (text.isNotEmpty) {
         _speak(text, audioBase64: audioBase64);
       }
@@ -225,6 +281,7 @@ class VoiceViewModel extends ChangeNotifier {
   }
 
   void _speak(String text, {String? audioBase64}) {
+    if (!_active) return;
     print("Assistant Speaking: $text");
     
     // UI Update
@@ -243,6 +300,7 @@ class VoiceViewModel extends ChangeNotifier {
 
     playback.then((_) {
       print("Assistant Finished Speaking.");
+      if (!_active) return;
       state = VoiceState.idle;
       notifyListeners();
       startListening(); // Auto-restart listening

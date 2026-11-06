@@ -75,6 +75,13 @@ public class SchedulerService {
         return snapshot;
     }
 
+    /** Current state of the session WITHOUT dispatching or notifying anyone. Used when a client
+     *  (re)connects mid-cook and needs the active instruction spoken back to it. */
+    public SessionSnapshotDto status(UUID sessionId) {
+        CookingSession session = loadSession(sessionId);
+        return buildSnapshot(session, computeMessage(session));
+    }
+
     /** Resolves which step is currently occupying a given stove, if any. Lets the user say
      *  "stove 1 is free" instead of relying on the single implicit currentUserTask when multiple
      *  stoves might have simultaneous waiting timers. */

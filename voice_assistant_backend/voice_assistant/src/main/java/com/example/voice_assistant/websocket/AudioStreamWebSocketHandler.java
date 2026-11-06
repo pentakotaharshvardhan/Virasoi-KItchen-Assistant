@@ -105,6 +105,25 @@ public class AudioStreamWebSocketHandler extends TextWebSocketHandler {
     protected void handleTextMessage(WebSocketSession session, TextMessage message) throws Exception {
         JsonNode node = objectMapper.readTree(message.getPayload());
         String action = node.path("action").asText("");
+        String type = node.path("type").asText("");
+
+        // The Flutter app does on-device speech-to-text and sends the finished text as
+        // {"type":"user_text","text":...}. Classify + route it exactly like a spoken utterance.
+        if (action.isEmpty() && "user_text".equals(type)) {
+            String text = node.path("text").asText(node.path("transcript").asText(""));
+            handleUserText(session, text);
+            return;
+        }
+
+        // A client (re)connecting to an in-progress session asks for the current state so it can
+        // speak the active instruction instead of sitting on a stale orb.
+        if (action.isEmpty() && "status".equals(type)) {
+            UUID sessionId = extractSessionId(session);
+            if (sessionId != null) {
+                send(session, "session_snapshot", schedulerService.status(sessionId));
+            }
+            return;
+        }
 
         switch (action) {
             case "start_utterance" -> {
@@ -191,8 +210,68 @@ public class AudioStreamWebSocketHandler extends TextWebSocketHandler {
         }
     }
 
+    /**
+     * Handles free-text commands (already transcribed on the device). Shared by the typed
+     * {"type":"user_text"} protocol and the legacy {"action":"step_command"} audio protocol.
+     */
+    private void handleUserText(WebSocketSession session, String transcript) throws Exception {
+        if (transcript == null || transcript.isBlank()) {
+            sendPrompt(session, "step_command", "I didn't catch that. Could you say it again?");
+            return;
+        }
+
+        VoiceCommandResultDto parsed = voiceCommandService.classify(transcript);
+        VoiceCommandService.Command command;
+        try {
+            command = VoiceCommandService.Command.valueOf(parsed.command);
+        } catch (Exception e) {
+            command = VoiceCommandService.Command.UNKNOWN;
+        }
+
+        if (command == VoiceCommandService.Command.HELP) {
+            String answer = (parsed.helpResponse != null && !parsed.helpResponse.isBlank())
+                    ? parsed.helpResponse
+                    : "I'm here to help - what would you like to know about the app?";
+            sendPrompt(session, "help", answer);
+            return;
+        }
+
+        if (command == VoiceCommandService.Command.REMOVE) {
+            // The pantry/checklist lives on the Flutter Ingredient screen, not the server. Broadcast
+            // the understood ingredient to the other sockets in this session (the Ingredient screen
+            // listens there) and acknowledge on the speaker's socket.
+            String ingredient = parsed.ingredientName == null ? "" : parsed.ingredientName.trim();
+            String message = ingredient.isEmpty()
+                    ? "Which ingredient should I remove?"
+                    : "Okay, removing " + ingredient + " from your list.";
+            UUID sessionId = extractSessionId(session);
+            broadcast(sessionId, "remove_ingredient",
+                    Map.of("ingredientName", ingredient, "message", message), session);
+            sendPrompt(session, "remove_ingredient", message);
+            return;
+        }
+
+        if (command == VoiceCommandService.Command.UNKNOWN) {
+            sendPrompt(session, "step_command",
+                    "I'm sorry, I didn't understand that. You can say next, wait, repeat, stop, or remove an ingredient.");
+            return;
+        }
+
+        UUID sessionId = extractSessionId(session);
+        if (sessionId == null) {
+            send(session, "error", Map.of("message", "sessionId query param is required for cooking commands"));
+            return;
+        }
+        handleParsedStepCommand(session, sessionId, transcript, Map.of(), parsed);
+    }
+
     private void handleStepCommand(WebSocketSession session, UUID sessionId, String transcript, Map<String, Object> meta) throws Exception {
         VoiceCommandResultDto parsed = voiceCommandService.classify(transcript);
+        handleParsedStepCommand(session, sessionId, transcript, meta, parsed);
+    }
+
+    private void handleParsedStepCommand(WebSocketSession session, UUID sessionId, String transcript,
+                                         Map<String, Object> meta, VoiceCommandResultDto parsed) throws Exception {
         VoiceCommandService.Command command;
         try {
             command = VoiceCommandService.Command.valueOf(parsed.command);
@@ -209,9 +288,13 @@ public class AudioStreamWebSocketHandler extends TextWebSocketHandler {
             return;
         }
         if (command == VoiceCommandService.Command.REMOVE) {
-            // No server-tracked pantry list exists - this is a client-side concern. Echo back what
-            // was understood so the Flutter Ingredient screen can remove it from its local list.
-            send(session, "remove_ingredient", Map.of("ingredientName", parsed.ingredientName == null ? "" : parsed.ingredientName));
+            String ingredient = parsed.ingredientName == null ? "" : parsed.ingredientName.trim();
+            String message = ingredient.isEmpty()
+                    ? "Which ingredient should I remove?"
+                    : "Okay, removing " + ingredient + " from your list.";
+            broadcast(sessionId, "remove_ingredient",
+                    Map.of("ingredientName", ingredient, "message", message), session);
+            sendPrompt(session, "remove_ingredient", message);
             return;
         }
 
@@ -313,6 +396,18 @@ public class AudioStreamWebSocketHandler extends TextWebSocketHandler {
             data.put("audioEncoding", "MP3");
         }
         send(session, "prompt", data);
+    }
+
+    /** Sends a message to every socket registered for this session except the originating one. */
+    private void broadcast(UUID sessionId, String type, Object data, WebSocketSession exclude) throws Exception {
+        if (sessionId == null) return;
+        String payload = objectMapper.writeValueAsString(Map.of("type", type, "data", data));
+        for (WebSocketSession ws : registry.get(sessionId)) {
+            if (ws == exclude || !ws.isOpen()) continue;
+            synchronized (ws) {
+                ws.sendMessage(new TextMessage(payload));
+            }
+        }
     }
 
     private void send(WebSocketSession session, String type, Object data) throws Exception {

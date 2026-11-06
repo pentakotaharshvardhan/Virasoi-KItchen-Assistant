@@ -22,7 +22,17 @@ class _VoiceAssistantPageState extends State<VoiceAssistantPage> {
   void initState() {
     super.initState();
     _vm = context.read<VoiceViewModel>();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _vm.init(widget.sessionId, helpMode: widget.helpMode));
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await _vm.init(widget.sessionId, helpMode: widget.helpMode);
+      // Ask for the current state so the first cooking instruction is spoken immediately.
+      if (!widget.helpMode) _vm.requestStatus();
+    });
+  }
+
+  @override
+  void dispose() {
+    _vm.detach();
+    super.dispose();
   }
 
   void _openTranscriptSheet() {

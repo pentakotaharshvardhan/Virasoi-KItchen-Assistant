@@ -18,6 +18,7 @@ void main() {
   late SecureStorage storage;
   late int dishCalls;
   late Map<String, dynamic> lastSessionBody;
+  late Map<String, dynamic> lastDishBody;
 
   IngredientModel onion() => IngredientModel.fromJson(ingredientJson(id: 'i1', name: 'Onion'));
   IngredientModel tomato() => IngredientModel.fromJson(ingredientJson(id: 'i2', name: 'Tomato'));
@@ -33,6 +34,7 @@ void main() {
       }
       if (request.url.path == '/api/sessions/sess-1/dishes') {
         dishCalls++;
+        lastDishBody = jsonDecode(request.body) as Map<String, dynamic>;
         return jsonResponse({});
       }
       return jsonResponse({}, status: 404);
@@ -63,10 +65,11 @@ void main() {
     storage = SecureStorage.inMemory();
     dishCalls = 0;
     lastSessionBody = {};
+    lastDishBody = {};
     ingredientService.result = Success(recipeWithIngredients([onion(), tomato()]));
   });
 
-  test('load fetches ingredients, starts a session and connects live sync', () async {
+  test('load fetches ingredients, starts a session and connects live sync without cooking', () async {
     await storage.saveSession(accessToken: 'jwt', userId: 'u-1');
     final vm = buildViewModel();
 
@@ -78,9 +81,25 @@ void main() {
     expect(vm.sessionId, 'sess-1');
     expect(lastSessionBody['userId'], 'u-1');
     expect(lastSessionBody['numberOfStoves'], 1);
-    expect(dishCalls, 1);
+    expect(dishCalls, 0, reason: 'cooking must not start while gathering ingredients');
     expect(ws.connected, isTrue);
     expect(ingredientService.lastRecipeId, 'recipe-ing');
+  });
+
+  test('startCooking adds the dish using the stoves/servings saved on the setup screen', () async {
+    await storage.saveSettings(stoves: 3, servings: 4);
+    final vm = buildViewModel();
+
+    await vm.load('recipe-ing');
+    await Future<void>.delayed(Duration.zero);
+    expect(lastSessionBody['numberOfStoves'], 3);
+
+    final ok = await vm.startCooking();
+
+    expect(ok, isTrue);
+    expect(dishCalls, 1);
+    expect(lastDishBody['dishName'], 'Test Dish');
+    expect(lastDishBody['servesRequested'], 4);
   });
 
   test('load enriches each ingredient with an Unsplash photo', () async {
@@ -180,6 +199,34 @@ void main() {
     await Future<void>.delayed(Duration.zero);
 
     expect(vm.confirmed.single.name, 'Onion');
+  });
+
+  test('remove_ingredient broadcast from the backend removes the matching card', () async {
+    final vm = await loaded();
+
+    ws.emit({
+      'type': 'remove_ingredient',
+      'data': {'ingredientName': 'onion', 'message': 'Okay, removing onion.'},
+    });
+    await Future<void>.delayed(Duration.zero);
+
+    expect(vm.pending.map((i) => i.name), ['Tomato']);
+    expect(vm.confirmed.single.name, 'Onion');
+  });
+
+  test('fuzzy matching handles plurals and partial names', () async {
+    ingredientService.result = Success(recipeWithIngredients([
+      IngredientModel.fromJson(ingredientJson(id: 'i3', name: 'Onions')),
+      IngredientModel.fromJson(ingredientJson(id: 'i4', name: 'Ginger-Garlic Paste')),
+    ]));
+    final vm = await loaded();
+
+    ws.emit({'type': 'remove_ingredient', 'data': {'ingredientName': 'onion'}});
+    ws.emit({'type': 'remove_ingredient', 'data': {'ingredientName': 'garlic'}});
+    await Future<void>.delayed(Duration.zero);
+
+    expect(vm.pending, isEmpty);
+    expect(vm.confirmed.map((i) => i.name), ['Onions', 'Ginger-Garlic Paste']);
   });
 
   test('an unknown ingredient name is ignored', () async {

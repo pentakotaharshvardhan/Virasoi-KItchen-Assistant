@@ -10,7 +10,10 @@ import org.springframework.web.reactive.function.client.WebClient;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @Service
 public class VoiceCommandService {
@@ -194,6 +197,7 @@ public class VoiceCommandService {
         fallback.command = Command.UNKNOWN.name();
         if (transcript == null || transcript.isBlank()) return fallback;
 
+        VoiceCommandResultDto parsed = null;
         try {
             Map<String, Object> body = new LinkedHashMap<>();
             body.put("system_instruction", Map.of("parts", List.of(Map.of("text", CLASSIFIER_INSTRUCTION))));
@@ -218,16 +222,140 @@ public class VoiceCommandService {
 
             JsonNode root = objectMapper.readTree(rawJson);
             String content = root.path("candidates").path(0).path("content").path("parts").path(0).path("text").asText();
-            VoiceCommandResultDto parsed = objectMapper.readValue(content, VoiceCommandResultDto.class);
+            parsed = objectMapper.readValue(content, VoiceCommandResultDto.class);
             try {
                 Command.valueOf(parsed.command);
             } catch (Exception e) {
                 parsed.command = Command.UNKNOWN.name();
             }
-            return parsed;
         } catch (Exception e) {
-            return fallback;
+            // AI unavailable / rate-limited / timed out - fall through to the rule-based classifier.
         }
+
+        // Gemini can be slow, rate-limited (free tier) or simply unsure. Rather than surfacing
+        // UNKNOWN for everyday phrases, fall back to a deterministic rule-based classifier.
+        if (parsed == null || Command.UNKNOWN.name().equals(parsed.command)) {
+            VoiceCommandResultDto ruleBased = ruleBasedClassify(transcript);
+            if (ruleBased != null) return ruleBased;
+        }
+        return parsed != null ? parsed : fallback;
+    }
+
+    private static final Pattern REMOVE_CMD = Pattern.compile(
+            "(?:remove|delete|take)\\s+(?:the\\s+)?(.+?)(?:\\s+(?:off|from)\\s+(?:the|my)?\\s*(?:list|checklist))?$");
+    private static final Pattern DONT_HAVE = Pattern.compile(
+            "(?:i\\s+)?(?:don't|dont|do not|didn't|didnt)\\s+have\\s+(?:any\\s+)?(.+?)(?:\\s+left)?$");
+    private static final Pattern WITHOUT = Pattern.compile("without\\s+(?:the\\s+)?(.+?)$");
+    private static final Pattern TIMER_DURATION = Pattern.compile(
+            "(\\d+)\\s*(second|seconds|sec|secs|minute|minutes|min|mins)");
+    private static final Pattern STOVE_INDEX = Pattern.compile("(?:stove|burner)\\s*(\\d+)");
+
+    /**
+     * Deterministic fallback for the common commands. Only used when the AI classifier is
+     * unavailable or returns UNKNOWN, so it can be conservative about ambiguous phrasing.
+     * Returns null when nothing matches (caller then keeps the AI's UNKNOWN).
+     */
+    private VoiceCommandResultDto ruleBasedClassify(String transcript) {
+        String t = transcript.toLowerCase(Locale.ROOT).trim().replaceAll("\\s+", " ");
+        t = t.replaceAll("[.!?,;]+$", "");
+        if (t.isEmpty()) return null;
+
+        VoiceCommandResultDto r = new VoiceCommandResultDto();
+
+        if (t.equals("help") || t.contains(" help") || t.startsWith("help ")
+                || t.startsWith("how do i") || t.startsWith("how can i")
+                || t.startsWith("what do i say") || t.startsWith("what should i say")
+                || t.contains("how does the app") || t.contains("how do you")) {
+            r.command = Command.HELP.name();
+            r.helpResponse = "You can say things like \"next\", \"wait\", \"repeat\", \"stop\", or "
+                    + "\"remove onions\". Ask me anything about how the app works.";
+            return r;
+        }
+
+        String ingredient = extractIngredient(t);
+        if (ingredient != null) {
+            r.command = Command.REMOVE.name();
+            r.ingredientName = ingredient;
+            return r;
+        }
+
+        if (containsWord(t, "repeat") || t.contains("say that again")
+                || t.contains("what did you say") || containsWord(t, "again")) {
+            r.command = Command.REPEAT.name();
+            return r;
+        }
+
+        if (containsWord(t, "stop") || containsWord(t, "cancel") || containsWord(t, "pause")
+                || t.contains("end the session")) {
+            r.command = Command.STOP.name();
+            return r;
+        }
+
+        if (containsWord(t, "wait") || t.contains("not yet") || t.contains("hold on")
+                || t.contains("more time") || t.contains("few more") || t.contains("a minute")) {
+            r.command = Command.WAIT.name();
+            return r;
+        }
+
+        if (containsWord(t, "next") || containsWord(t, "done") || containsWord(t, "finished")
+                || t.contains("i'm done") || t.contains("im done")
+                || t.contains("that's finished") || t.contains("thats finished")) {
+            r.command = Command.NEXT.name();
+            r.stoveIndex = extractStoveIndex(t);
+            return r;
+        }
+
+        if (t.equals("no") || t.equals("nope") || t.startsWith("no ") || t.startsWith("nope ")
+                || t.contains("no thanks") || t.contains("skip the timer") || t.contains("skip timer")
+                || t.contains("don't set") || t.contains("dont set")) {
+            r.command = Command.TIMER_NO.name();
+            return r;
+        }
+
+        if (t.equals("yes") || t.equals("yeah") || t.equals("sure")
+                || t.startsWith("yes ") || t.startsWith("yeah ") || t.startsWith("sure ")
+                || t.contains("set a timer") || t.contains("start a timer") || t.contains("set it for")) {
+            r.command = Command.TIMER_YES.name();
+            r.timerSeconds = extractTimerSeconds(t);
+            return r;
+        }
+
+        return null;
+    }
+
+    private String extractIngredient(String t) {
+        Matcher m = REMOVE_CMD.matcher(t);
+        if (m.find()) return cleanIngredient(m.group(1));
+        m = DONT_HAVE.matcher(t);
+        if (m.find()) return cleanIngredient(m.group(1));
+        m = WITHOUT.matcher(t);
+        if (m.find()) return cleanIngredient(m.group(1));
+        return null;
+    }
+
+    private String cleanIngredient(String raw) {
+        if (raw == null) return null;
+        String s = raw.trim()
+                .replaceAll("\\s+(?:please|now)$", "")
+                .replaceAll("\\s+(?:from|off)\\s+(?:the|my)?\\s*(?:list|checklist)$", "")
+                .trim();
+        return s.isEmpty() ? null : s;
+    }
+
+    private boolean containsWord(String haystack, String word) {
+        return Pattern.compile("\\b" + Pattern.quote(word) + "\\b").matcher(haystack).find();
+    }
+
+    private Integer extractStoveIndex(String t) {
+        Matcher m = STOVE_INDEX.matcher(t);
+        return m.find() ? Integer.valueOf(m.group(1)) : null;
+    }
+
+    private Integer extractTimerSeconds(String t) {
+        Matcher m = TIMER_DURATION.matcher(t);
+        if (!m.find()) return null;
+        int amount = Integer.parseInt(m.group(1));
+        return m.group(2).startsWith("min") ? amount * 60 : amount;
     }
 
     public String answerHelpQuestion(String question) {
