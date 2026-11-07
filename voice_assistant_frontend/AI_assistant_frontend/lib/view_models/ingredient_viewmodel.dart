@@ -142,8 +142,7 @@ class IngredientViewModel extends ChangeNotifier {
       final data = msg['data'] as Map<String, dynamic>?;
 
       if (type == 'remove_ingredient') {
-        final name = data?['ingredientName']?.toString() ?? msg['ingredientName']?.toString();
-        if (name != null && name.trim().isNotEmpty) markConfirmedByName(name);
+        markConfirmedByNames(_ingredientNamesFromMessage(msg, data));
       } else if (type == 'item_confirmed') {
         final name = data?['itemName']?.toString() ?? msg['itemName']?.toString();
         if (name != null) markConfirmedByName(name);
@@ -154,27 +153,82 @@ class IngredientViewModel extends ChangeNotifier {
           notifyListeners();
         }
       } else if (command == 'REMOVE') {
-        final ingName = msg['ingredientName']?.toString() ?? data?['ingredientName']?.toString();
-        if (ingName != null) markConfirmedByName(ingName);
+        markConfirmedByNames(_ingredientNamesFromMessage(msg, data));
       }
     });
   }
 
-  void markConfirmedByName(String name) {
-    final query = name.trim().toLowerCase();
-    if (query.isEmpty) return;
-
-    // 1. exact match, then 2. fuzzy (plurals / partial names like "garlic" vs "ginger-garlic paste").
-    int idx = pending.indexWhere((i) => i.name.toLowerCase() == query);
-    if (idx == -1) {
-      idx = pending.indexWhere((i) => _namesMatch(i.name.toLowerCase(), query));
+  List<String> _ingredientNamesFromMessage(
+    Map<String, dynamic> message,
+    Map<String, dynamic>? data,
+  ) {
+    final rawNames = data?['ingredientNames'] ?? message['ingredientNames'];
+    if (rawNames is List) {
+      return rawNames
+          .map((name) => name.toString().trim())
+          .where((name) => name.isNotEmpty)
+          .toList();
     }
-    if (idx == -1) return;
 
-    final item = pending.removeAt(idx);
-    item.isConfirmedAvailable = true;
-    confirmed.add(item);
+    final singleName = data?['ingredientName']?.toString() ??
+        message['ingredientName']?.toString();
+    if (singleName == null || singleName.trim().isEmpty) return const [];
+
+    return singleName
+        .split(RegExp(r'\s*(?:,|\band\b|&)\s*', caseSensitive: false))
+        .map((name) => name.trim())
+        .where((name) => name.isNotEmpty)
+        .toList();
+  }
+
+  void markConfirmedByNames(Iterable<String> names) {
+    final requestedNames = names
+        .map((name) => name.trim().toLowerCase())
+        .where((name) => name.isNotEmpty)
+        .toList();
+    if (requestedNames.isEmpty || pending.isEmpty) return;
+
+    final matchedByName = List<int?>.filled(requestedNames.length, null);
+    final usedIndices = <int>{};
+
+    for (var i = 0; i < requestedNames.length; i++) {
+      final index = pending.indexWhere(
+        (item) =>
+            !usedIndices.contains(pending.indexOf(item)) &&
+            item.name.trim().toLowerCase() == requestedNames[i],
+      );
+      if (index != -1) {
+        matchedByName[i] = index;
+        usedIndices.add(index);
+      }
+    }
+
+    for (var i = 0; i < requestedNames.length; i++) {
+      if (matchedByName[i] != null) continue;
+      final index = pending.indexWhere(
+        (item) =>
+            !usedIndices.contains(pending.indexOf(item)) &&
+            _namesMatch(item.name.trim().toLowerCase(), requestedNames[i]),
+      );
+      if (index != -1) {
+        matchedByName[i] = index;
+        usedIndices.add(index);
+      }
+    }
+
+    if (usedIndices.isEmpty) return;
+    final matchedItems = usedIndices.toList()..sort();
+    final itemsToMove = matchedItems.map((index) => pending[index]).toSet();
+    for (final item in itemsToMove) {
+      item.isConfirmedAvailable = true;
+      confirmed.add(item);
+    }
+    pending.removeWhere(itemsToMove.contains);
     notifyListeners();
+  }
+
+  void markConfirmedByName(String name) {
+    markConfirmedByNames([name]);
   }
 
   bool _namesMatch(String item, String query) {
@@ -197,6 +251,9 @@ class IngredientViewModel extends ChangeNotifier {
   }
 
   bool get isDoneConfirming => pending.isEmpty;
+
+  /// Names still on the checklist - read out when the assistant is asked what's remaining.
+  List<String> get remainingNames => pending.map((i) => i.name).toList();
 
   void stopLiveSync() {
     _ws?.dispose();

@@ -33,9 +33,26 @@ class VoiceViewModel extends ChangeNotifier {
   String liveTranscript = '';
   final List<ChatMessageModel> transcript = [];
 
+  /// Latest session snapshot pushed by the scheduler (dishes, stoves, progress) - the cooking
+  /// screen renders the recipe-steps panel from it.
+  Map<String, dynamic>? lastSnapshot;
+
+  /// When true the user is being asked "are you ready to start cooking?" and their answer is
+  /// handled locally instead of being sent to the backend (the dish isn't added yet).
+  bool readyCheckActive = false;
+  Future<void> Function()? onUserReady;
+
+  /// The Ingredient screen registers this so the assistant can read out whatever is still
+  /// pending when the backend asks with a `remaining_items_request`.
+  Future<List<String>> Function()? onRemainingItemsRequest;
+  void Function(List<String> names)? onIngredientsRemoved;
+
   Timer? _stabilityTimer;
   Timer? _absoluteTimeoutTimer;
   String _lastLiveText = '';
+  String _finalizedTranscript = '';
+  String _partialTranscript = '';
+  bool _isRestartingListener = false;
 
   /// False while the microphone is intentionally paused (e.g. the screen was left, or we're
   /// handing off to another screen). Prevents a finishing TTS playback from auto-resuming the mic.
@@ -54,8 +71,15 @@ class VoiceViewModel extends ChangeNotifier {
     sessionId = sid ?? const Uuid().v4();
     liveTranscript = '';
     _lastLiveText = '';
+    _finalizedTranscript = '';
+    _partialTranscript = '';
     state = VoiceState.idle;
     _active = true;
+    readyCheckActive = false;
+    onUserReady = null;
+    // onRemainingItemsRequest is intentionally NOT cleared here: the Ingredient screen
+    // registers it while it sits underneath this one in the nav stack.
+    lastSnapshot = null;
     notifyListeners();
 
     // 1. Permissions & Setup
@@ -65,7 +89,8 @@ class VoiceViewModel extends ChangeNotifier {
 
     // 2. WebSocket Connection (only for non-help mode if preferred, but safe to connect always)
     final token = await _storage.accessToken;
-    _ws = _wsFactory(ApiConstants.wsVoiceAssistant(token ?? '', sessionId!), token);
+    _ws = _wsFactory(
+        ApiConstants.wsVoiceAssistant(token ?? '', sessionId!), token);
     _ws!.connect();
     _ws!.messages.listen(_handleServerMessage);
 
@@ -75,59 +100,104 @@ class VoiceViewModel extends ChangeNotifier {
 
   void _handleSttStatus(String status) {
     debugPrint("STT Status changed: $status");
-    // If the system shuts off the mic but app state is still 'listening', restart it.
-    if ((status == 'done' || status == 'notListening') && state == VoiceState.listening) {
-      if (liveTranscript.trim().isEmpty) {
-        _startListeningInternal();
-      }
+    if ((status == 'done' || status == 'notListening') &&
+        state == VoiceState.listening &&
+        !_isRestartingListener) {
+      _isRestartingListener = true;
+      _startListeningInternal(preserveTranscript: true).whenComplete(() {
+        _isRestartingListener = false;
+      });
     }
   }
 
   Future<void> startListening() async {
     _active = true;
-    if (state == VoiceState.listening || state == VoiceState.speaking || state == VoiceState.thinking) return;
+    if (state == VoiceState.listening ||
+        state == VoiceState.speaking ||
+        state == VoiceState.thinking) return;
 
     _startAbsoluteTimeout();
     await _startListeningInternal();
   }
 
-  Future<void> _startListeningInternal() async {
+  Future<void> _startListeningInternal(
+      {bool preserveTranscript = false}) async {
     print("Voice: Listening starting...");
     state = VoiceState.listening;
-    liveTranscript = '';
-    _lastLiveText = '';
+    if (!preserveTranscript) {
+      liveTranscript = '';
+      _lastLiveText = '';
+      _finalizedTranscript = '';
+      _partialTranscript = '';
+    }
     notifyListeners();
 
     await _voice.startListening(
       onResult: (text, isFinal) {
         if (state != VoiceState.listening) return;
 
-        liveTranscript = text;
+        _updateTranscript(text, isFinal);
         notifyListeners();
 
         if (text.trim().isNotEmpty) {
-          // Restart safety timers
           _startAbsoluteTimeout();
 
-          // 10s logic: only start timer if we actually have some text
           _stabilityTimer?.cancel();
-          _stabilityTimer = Timer(const Duration(seconds: 10), () {
-            if (liveTranscript.trim().isNotEmpty && liveTranscript == _lastLiveText) {
-              print("Voice: 10s stability reached for '$liveTranscript'. Sending...");
+          _stabilityTimer = Timer(const Duration(seconds: 20), () {
+            if (liveTranscript.trim().isNotEmpty &&
+                liveTranscript == _lastLiveText) {
+              print(
+                  "Voice: 20s silence reached for '$liveTranscript'. Sending...");
               _sendUserText(liveTranscript.trim());
             }
           });
-          _lastLiveText = text;
+          _lastLiveText = liveTranscript;
         } else {
-          // If text is empty (silent), just keep listening
           _stabilityTimer?.cancel();
         }
-
-        if (isFinal && text.trim().isNotEmpty) {
-          _sendUserText(text.trim());
+        if (isFinal && liveTranscript.trim().isNotEmpty) {
+          _sendUserText(liveTranscript.trim());
         }
       },
     );
+  }
+
+  void _updateTranscript(String text, bool isFinal) {
+    final recognized = text.trim();
+    if (recognized.isEmpty) return;
+
+    final finalizedLower = _finalizedTranscript.toLowerCase();
+    final recognizedLower = recognized.toLowerCase();
+    if (isFinal) {
+      var completed = recognized;
+      if (_partialTranscript.isNotEmpty &&
+          !recognizedLower.startsWith(_partialTranscript.toLowerCase()) &&
+          (finalizedLower.isEmpty ||
+              !recognizedLower.startsWith(finalizedLower))) {
+        completed = '$_partialTranscript $recognized';
+      }
+      if (finalizedLower.isEmpty ||
+          recognizedLower.startsWith(finalizedLower)) {
+        _finalizedTranscript = completed;
+      } else if (!completed.toLowerCase().startsWith(finalizedLower) &&
+          completed.toLowerCase() != finalizedLower) {
+        _finalizedTranscript = '$_finalizedTranscript $completed'.trim();
+      } else {
+        _finalizedTranscript = completed;
+      }
+      liveTranscript = _finalizedTranscript;
+      _partialTranscript = '';
+      return;
+    }
+
+    _partialTranscript = recognized;
+    if (finalizedLower.isEmpty || recognizedLower.startsWith(finalizedLower)) {
+      liveTranscript = recognized;
+    } else if (recognizedLower == finalizedLower) {
+      liveTranscript = _finalizedTranscript;
+    } else {
+      liveTranscript = '$_finalizedTranscript $recognized'.trim();
+    }
   }
 
   void _startAbsoluteTimeout() {
@@ -178,15 +248,23 @@ class VoiceViewModel extends ChangeNotifier {
   void _sendUserText(String text) async {
     _stabilityTimer?.cancel();
     _lastLiveText = '';
-    
+
     // Reset live text so it's not visible while thinking
     liveTranscript = '';
+    _finalizedTranscript = '';
+    _partialTranscript = '';
     transcript.add(ChatMessageModel(text: text, sender: ChatSender.user));
     state = VoiceState.thinking;
     notifyListeners();
-    
+
     _voice.stopListening();
-    
+
+    // Ready-check: the dish hasn't been added to the session yet, so answer locally.
+    if (readyCheckActive) {
+      await _handleReadyCheck(text);
+      return;
+    }
+
     if (isHelpMode) {
       print("DEBUG: Sending Help Question -> '$text'");
       final res = await _ai.askHelp(text);
@@ -198,13 +276,95 @@ class VoiceViewModel extends ChangeNotifier {
     } else {
       print("DEBUG: Sending Command Transcript -> '$text'");
       _ws?.send({
-        'type': 'user_text', 
-        'sessionId': sessionId, 
+        'type': 'user_text',
+        'sessionId': sessionId,
         'text': text,
         'transcript': text,
       });
     }
   }
+
+  /// Sends text typed into the chat input field through the exact same pipeline as speech.
+  void sendTypedText(String text) {
+    final t = text.trim();
+    if (t.isEmpty) return;
+    _sendUserText(t);
+  }
+
+  /// Asks "are you ready to start cooking?" before any step is dispatched.
+  Future<void> beginReadyCheck(
+      {required Future<void> Function() onReady, bool announce = true}) async {
+    readyCheckActive = true;
+    onUserReady = onReady;
+    if (announce) {
+      await _voice.stopListening();
+      if (state == VoiceState.listening) state = VoiceState.idle;
+      notifyListeners();
+      _speak('All ingredients are gathered. Are you ready to start cooking?');
+    }
+  }
+
+  Future<void> _handleReadyCheck(String text) async {
+    final t = text.toLowerCase().trim();
+    if (_looksLikeNo(t)) {
+      _speak(
+          'No problem - take your time. Say "ready" when you want to start cooking.');
+      return;
+    }
+    if (_looksLikeYes(t)) {
+      readyCheckActive = false;
+      final cb = onUserReady;
+      onUserReady = null;
+      notifyListeners();
+      if (cb != null) await cb();
+      return;
+    }
+    _speak('Are you ready to start cooking? Say yes or no.');
+  }
+
+  bool _looksLikeNo(String t) {
+    return t == 'no' ||
+        t == 'nope' ||
+        t.startsWith('no ') ||
+        t.startsWith('nope') ||
+        t.contains('not ready') ||
+        t.contains('not yet') ||
+        t.contains('not now') ||
+        t.startsWith('wait') ||
+        t.contains('hold on') ||
+        t.contains('give me') ||
+        t.contains('later') ||
+        t.contains('a minute') ||
+        t.contains('few minutes');
+  }
+
+  bool _looksLikeYes(String t) {
+    return t == 'yes' ||
+        t == 'yeah' ||
+        t == 'yep' ||
+        t == 'yup' ||
+        t == 'sure' ||
+        t == 'ok' ||
+        t == 'okay' ||
+        t == 'ready' ||
+        t == 'start' ||
+        t == 'go' ||
+        t == 'begin' ||
+        t.startsWith('yes') ||
+        t.startsWith('sure') ||
+        t.startsWith('ready') ||
+        t.startsWith("let's") ||
+        t.startsWith('lets') ||
+        t.startsWith('go ahead') ||
+        t.startsWith('i am ready') ||
+        t.startsWith("i'm ready") ||
+        t.contains('ready to cook') ||
+        t.contains('start cooking');
+  }
+
+  /// Public speak helper (used e.g. to announce a failed start-cooking attempt).
+  void speakText(String text, {String? audioBase64}) =>
+      _speak(text, audioBase64: audioBase64);
 
   void _handleServerMessage(Map<String, dynamic> msg) {
     print("WS RECEIVED FULL JSON: $msg");
@@ -219,11 +379,37 @@ class VoiceViewModel extends ChangeNotifier {
     // 0. Session snapshots (pushed by the scheduler, or requested with {"type":"status"} when a
     //    cooking screen opens). The spoken text lives under data.message.
     if (type == 'session_snapshot') {
-      final text = data?['message']?.toString() ?? msg['message']?.toString() ?? '';
-      final audioBase64 = data?['messageAudioBase64']?.toString()
-          ?? msg['messageAudioBase64']?.toString()
-          ?? data?['audioBase64']?.toString();
+      if (data != null) lastSnapshot = data;
+      final text =
+          data?['message']?.toString() ?? msg['message']?.toString() ?? '';
+      final audioBase64 = data?['messageAudioBase64']?.toString() ??
+          msg['messageAudioBase64']?.toString() ??
+          data?['audioBase64']?.toString();
       if (text.isNotEmpty) _speak(text, audioBase64: audioBase64);
+      return;
+    }
+
+    // The backend classified the utterance as "what's left on the list?" - ask the Ingredient
+    // screen for its pending items and read them out.
+    if (type == 'remaining_items_request') {
+      _speakRemainingItems();
+      return;
+    }
+
+    if (type == 'remove_ingredient') {
+      final rawNames = data?['ingredientNames'] ?? msg['ingredientNames'];
+      final names = rawNames is List
+          ? rawNames
+              .map((name) => name.toString().trim())
+              .where((name) => name.isNotEmpty)
+              .toList()
+          : <String>[];
+      if (names.isEmpty) {
+        final name = data?['ingredientName']?.toString() ??
+            msg['ingredientName']?.toString();
+        if (name != null && name.trim().isNotEmpty) names.add(name.trim());
+      }
+      if (names.isNotEmpty) onIngredientsRemoved?.call(names);
       return;
     }
 
@@ -233,13 +419,16 @@ class VoiceViewModel extends ChangeNotifier {
       print("DEBUG: Identified Command Type -> $command");
       if (command != 'UNKNOWN') {
         if (command == 'REMOVE') {
-          final ing = msg['ingredientName']?.toString() ?? data?['ingredientName']?.toString();
-          final serverMessage = msg['message']?.toString() ?? data?['message']?.toString();
+          final ing = msg['ingredientName']?.toString() ??
+              data?['ingredientName']?.toString();
+          final serverMessage =
+              msg['message']?.toString() ?? data?['message']?.toString();
           _speak(serverMessage ?? "Okay, removing $ing from your list.");
           return;
         }
         if (command == 'HELP') {
-          final help = msg['helpResponse']?.toString() ?? data?['helpResponse']?.toString();
+          final help = msg['helpResponse']?.toString() ??
+              data?['helpResponse']?.toString();
           if (help != null) _speak(help);
           return;
         }
@@ -248,11 +437,12 @@ class VoiceViewModel extends ChangeNotifier {
 
     // 2. Handle prompt messages (Common in HELP mode or direct prompts)
     if (type != 'error' && (type == 'prompt' || msg.containsKey('message'))) {
-      final text = msg['message']?.toString() ?? data?['message']?.toString() ?? '';
-      final audioBase64 = msg['messageAudioBase64']?.toString()
-          ?? data?['messageAudioBase64']?.toString()
-          ?? msg['audioBase64']?.toString()
-          ?? data?['audioBase64']?.toString();
+      final text =
+          msg['message']?.toString() ?? data?['message']?.toString() ?? '';
+      final audioBase64 = msg['messageAudioBase64']?.toString() ??
+          data?['messageAudioBase64']?.toString() ??
+          msg['audioBase64']?.toString() ??
+          data?['audioBase64']?.toString();
       if (text.isNotEmpty) {
         _speak(text, audioBase64: audioBase64);
       }
@@ -262,10 +452,13 @@ class VoiceViewModel extends ChangeNotifier {
     // 3. Handle standard text/session reply
     final reply = msg['text']?.toString() ?? data?['text']?.toString();
     if (reply != null && reply.isNotEmpty && type != 'error') {
-      if (transcript.isNotEmpty && transcript.last.text == reply && transcript.last.sender == ChatSender.assistant) return;
-      
+      if (transcript.isNotEmpty &&
+          transcript.last.text == reply &&
+          transcript.last.sender == ChatSender.assistant) return;
+
       if (reply.toLowerCase().contains('unknown action') && !isHelpMode) {
-        _speak("I'm sorry, I didn't understand that command. Could you please say it differently?");
+        _speak(
+            "I'm sorry, I didn't understand that command. Could you please say it differently?");
       } else {
         _speak(reply);
       }
@@ -273,22 +466,40 @@ class VoiceViewModel extends ChangeNotifier {
     }
 
     if (type == 'error') {
-      final errMsg = reply ?? msg['message']?.toString() ?? "Sorry, I encountered an error.";
+      final errMsg = reply ??
+          msg['message']?.toString() ??
+          "Sorry, I encountered an error.";
       if (!errMsg.toLowerCase().contains('unknown action')) {
         _speak(errMsg);
       }
     }
   }
 
+  Future<void> _speakRemainingItems() async {
+    List<String> items = const [];
+    final cb = onRemainingItemsRequest;
+    if (cb != null) {
+      try {
+        items = await cb();
+      } catch (_) {
+        items = const [];
+      }
+    }
+    final msg = items.isEmpty
+        ? "You've got everything you need - nothing is left on the list."
+        : 'You still need: ${items.join(', ')}.';
+    _speak(msg);
+  }
+
   void _speak(String text, {String? audioBase64}) {
     if (!_active) return;
     print("Assistant Speaking: $text");
-    
+
     // UI Update
     transcript.add(ChatMessageModel(text: text, sender: ChatSender.assistant));
     state = VoiceState.speaking;
     notifyListeners();
-    
+
     // Play sound (Priority to backend audio if available)
     Future<void> playback;
     if (audioBase64 != null && audioBase64.isNotEmpty) {

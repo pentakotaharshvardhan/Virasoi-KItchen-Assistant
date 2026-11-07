@@ -229,6 +229,67 @@ void main() {
     expect(vm.confirmed.map((i) => i.name), ['Onions', 'Ginger-Garlic Paste']);
   });
 
+  test('a multi-ingredient remove_ingredient broadcast clears every named item', () async {
+    final vm = await loaded();
+
+    ws.emit({
+      'type': 'remove_ingredient',
+      'data': {
+        'ingredientNames': ['onion', 'tomato'],
+        'ingredientName': 'onion',
+        'message': 'Okay, removing onion and tomato from your list.',
+      },
+    });
+    await Future<void>.delayed(Duration.zero);
+
+    expect(vm.pending, isEmpty);
+    expect(vm.confirmed.map((i) => i.name), ['Onion', 'Tomato']);
+    expect(vm.remainingNames, isEmpty);
+  });
+
+  test('a single-name field containing a list removes each matching item', () async {
+    final vm = await loaded();
+
+    ws.emit({
+      'type': 'remove_ingredient',
+      'data': {'ingredientName': 'onions and tomatoes'},
+    });
+    await Future<void>.delayed(Duration.zero);
+
+    expect(vm.pending, isEmpty);
+    expect(vm.confirmed.map((item) => item.name), ['Onion', 'Tomato']);
+  });
+
+  test('batch matching prefers exact matches before partial matches', () async {
+    ingredientService.result = Success(recipeWithIngredients([
+      IngredientModel.fromJson(ingredientJson(id: 'i5', name: 'Garlic Paste')),
+      IngredientModel.fromJson(ingredientJson(id: 'i6', name: 'Garlic')),
+    ]));
+    final vm = await loaded();
+
+    ws.emit({
+      'type': 'remove_ingredient',
+      'data': {
+        'ingredientNames': ['garlic', 'garlic paste'],
+      },
+    });
+    await Future<void>.delayed(Duration.zero);
+
+    expect(vm.pending, isEmpty);
+    expect(vm.confirmed.map((item) => item.name), ['Garlic Paste', 'Garlic']);
+  });
+
+  test('remainingNames lists whatever has not been gathered yet', () async {
+    final vm = await loaded();
+
+    expect(vm.remainingNames, ['Onion', 'Tomato']);
+
+    ws.emit({'type': 'item_confirmed', 'itemName': 'Onion'});
+    await Future<void>.delayed(Duration.zero);
+
+    expect(vm.remainingNames, ['Tomato']);
+  });
+
   test('an unknown ingredient name is ignored', () async {
     final vm = await loaded();
 

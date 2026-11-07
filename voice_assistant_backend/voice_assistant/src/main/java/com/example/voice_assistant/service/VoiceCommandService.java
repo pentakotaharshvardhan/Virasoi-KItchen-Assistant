@@ -18,7 +18,7 @@ import java.util.regex.Pattern;
 @Service
 public class VoiceCommandService {
 
-    public enum Command { NEXT, WAIT, TIMER_YES, TIMER_NO, REPEAT, STOP, REMOVE, HELP, UNKNOWN }
+    public enum Command { NEXT, WAIT, TIMER_YES, TIMER_NO, REPEAT, STOP, REMOVE, REMAINING_ITEMS, HELP, UNKNOWN }
 
     public record CommandExample(String phrase, String command, String note) {}
 
@@ -61,6 +61,13 @@ public class VoiceCommandService {
                     "Removes an item from your ingredient checklist (Ingredient screen only)."),
             new CommandExample("I don't have tomatoes", "REMOVE", "Same intent, phrased as a statement instead of a command."),
             new CommandExample("take garlic off the list", "REMOVE", "Same as \"remove garlic\"."),
+            new CommandExample("remove onions and tomatoes", "REMOVE",
+                    "Removes MULTIPLE items at once - list every item separated by \"and\" or commas."),
+
+            new CommandExample("tell me the remaining items", "REMAINING_ITEMS",
+                    "Reads out everything still left on the ingredient checklist (Ingredient screen only)."),
+            new CommandExample("what's left on the list", "REMAINING_ITEMS", "Same as above."),
+            new CommandExample("what items do we still need", "REMAINING_ITEMS", "Same as above."),
 
             new CommandExample("help", "HELP", "Opens general help about how the app works."),
             new CommandExample("how do I start a timer", "HELP", "Ask about any specific feature, any time."),
@@ -131,10 +138,11 @@ public class VoiceCommandService {
             output) and respond with ONLY a single valid JSON object - no markdown fences, no
             commentary - matching exactly this shape:
             {
-              "command": one of "NEXT" | "WAIT" | "TIMER_YES" | "TIMER_NO" | "REPEAT" | "STOP" | "REMOVE" | "HELP" | "UNKNOWN",
+              "command": one of "NEXT" | "WAIT" | "TIMER_YES" | "TIMER_NO" | "REPEAT" | "STOP" | "REMOVE" | "REMAINING_ITEMS" | "HELP" | "UNKNOWN",
               "stoveIndex": integer or null,
               "dishName": string or null,
               "ingredientName": string or null,
+              "ingredientNames": array of strings or null,
               "timerSeconds": integer or null,
               "helpResponse": string or null
             }
@@ -144,9 +152,14 @@ public class VoiceCommandService {
             - WAIT: user wants to hold before moving on.
             - TIMER_YES: user wants a timer started (extract a spoken duration into timerSeconds if given, e.g. "5 minutes" -> 300).
             - TIMER_NO: user declines a timer.
-            - REPEAT: user wants the last instruction repeated.
+            - REPEAT: user wants the last instruction/step repeated.
             - STOP: user wants to end/pause the session.
-            - REMOVE: user wants an ingredient taken off their checklist (Ingredient screen only) - extract the item into ingredientName.
+            - REMOVE: user wants ingredient(s) taken off their checklist (Ingredient screen only) - if they name
+              more than one item ("remove onions and tomatoes"), put EVERY item into ingredientNames as a JSON
+              array of strings, and also put the first one into ingredientName.
+            - REMAINING_ITEMS: user is asking what is still left / what items are still needed on the
+              ingredient checklist (Ingredient screen only), e.g. "tell me the remaining items",
+              "what's left on the list". ingredientName/ingredientNames stay null.
             - HELP: user is asking a question about how the app works (not giving a cooking command).
               Answer it yourself in helpResponse using this knowledge, and WHENEVER the question is
               "how do I..." or "what do I say to...", you MUST include at least one concrete example
@@ -157,7 +170,9 @@ public class VoiceCommandService {
             Extraction rules:
             - stoveIndex: set ONLY if the user explicitly names a stove/burner number (e.g. "stove 1", "burner two" -> 2). Otherwise null.
             - dishName: set ONLY if the user names a specific dish (e.g. "the paneer", "the rice"). Otherwise null.
-            - ingredientName: set ONLY for REMOVE, the exact ingredient named. Otherwise null.
+            - ingredientName: set ONLY for REMOVE, the first ingredient named. Otherwise null.
+            - ingredientNames: set ONLY for REMOVE, the full JSON array of every ingredient named (one string each,
+              clean and lowercase). Otherwise null.
             - timerSeconds: set ONLY for TIMER_YES when a duration is spoken; convert minutes to seconds. Otherwise null.
             - helpResponse: set ONLY for HELP, a short friendly spoken-style answer (2-5 sentences), including a quoted example sentence whenever relevant.
 
@@ -238,11 +253,19 @@ public class VoiceCommandService {
             VoiceCommandResultDto ruleBased = ruleBasedClassify(transcript);
             if (ruleBased != null) return ruleBased;
         }
+        if (parsed != null && Command.REMOVE.name().equals(parsed.command)) {
+            VoiceCommandResultDto ruleBased = ruleBasedClassify(transcript);
+            if (ruleBased != null && Command.REMOVE.name().equals(ruleBased.command)
+                    && ruleBased.ingredientNames != null && !ruleBased.ingredientNames.isEmpty()) {
+                parsed.ingredientNames = ruleBased.ingredientNames;
+                parsed.ingredientName = ruleBased.ingredientName;
+            }
+        }
         return parsed != null ? parsed : fallback;
     }
 
     private static final Pattern REMOVE_CMD = Pattern.compile(
-            "(?:remove|delete|take)\\s+(?:the\\s+)?(.+?)(?:\\s+(?:off|from)\\s+(?:the|my)?\\s*(?:list|checklist))?$");
+            "(?:(?:please\\s+)?(?:can you|could you)\\s+|please\\s+)?(?:remove|delete|take)\\s+(?:the\\s+)?(.+?)(?:\\s+(?:off|from)\\s+(?:the|my)?\\s*(?:list|checklist))?$");
     private static final Pattern DONT_HAVE = Pattern.compile(
             "(?:i\\s+)?(?:don't|dont|do not|didn't|didnt)\\s+have\\s+(?:any\\s+)?(.+?)(?:\\s+left)?$");
     private static final Pattern WITHOUT = Pattern.compile("without\\s+(?:the\\s+)?(.+?)$");
@@ -272,14 +295,24 @@ public class VoiceCommandService {
             return r;
         }
 
-        String ingredient = extractIngredient(t);
-        if (ingredient != null) {
-            r.command = Command.REMOVE.name();
-            r.ingredientName = ingredient;
+        if (t.contains("remaining") || t.contains("what's left") || t.contains("what is left")
+                || t.contains("what do we need") || t.contains("what items")
+                || t.contains("still need") || t.contains("still on the list")
+                || t.contains("tell me what") || t.contains("list the item")) {
+            r.command = Command.REMAINING_ITEMS.name();
             return r;
         }
 
-        if (containsWord(t, "repeat") || t.contains("say that again")
+        List<String> ingredients = extractIngredients(t);
+        if (!ingredients.isEmpty()) {
+            r.command = Command.REMOVE.name();
+            r.ingredientNames = ingredients;
+            r.ingredientName = ingredients.get(0);
+            return r;
+        }
+
+        if (containsWord(t, "repeat") || t.contains("say that again") || t.contains("say it again")
+                || t.contains("say the step again") || t.contains("repeat the step")
                 || t.contains("what did you say") || containsWord(t, "again")) {
             r.command = Command.REPEAT.name();
             return r;
@@ -323,23 +356,34 @@ public class VoiceCommandService {
         return null;
     }
 
-    private String extractIngredient(String t) {
+    /** Extracts every ingredient named in a remove-style utterance ("remove onions and tomatoes,
+     *  garlic" -> [onions, tomatoes, garlic]). Splits on commas, "and", "or" and "&". */
+    private List<String> extractIngredients(String t) {
+        String raw = null;
         Matcher m = REMOVE_CMD.matcher(t);
-        if (m.find()) return cleanIngredient(m.group(1));
-        m = DONT_HAVE.matcher(t);
-        if (m.find()) return cleanIngredient(m.group(1));
-        m = WITHOUT.matcher(t);
-        if (m.find()) return cleanIngredient(m.group(1));
-        return null;
-    }
+        if (m.find()) raw = m.group(1);
+        else {
+            m = DONT_HAVE.matcher(t);
+            if (m.find()) raw = m.group(1);
+            else {
+                m = WITHOUT.matcher(t);
+                if (m.find()) raw = m.group(1);
+            }
+        }
+        if (raw == null) return List.of();
 
-    private String cleanIngredient(String raw) {
-        if (raw == null) return null;
-        String s = raw.trim()
-                .replaceAll("\\s+(?:please|now)$", "")
+        String cleaned = raw.replaceAll("\\s+(?:please|now)$", "")
                 .replaceAll("\\s+(?:from|off)\\s+(?:the|my)?\\s*(?:list|checklist)$", "")
                 .trim();
-        return s.isEmpty() ? null : s;
+        if (cleaned.isEmpty()) return List.of();
+
+        String[] parts = cleaned.split("\\s*(?:,|\\band\\b|\\bor\\b|\\&)\\s*");
+        List<String> out = new java.util.ArrayList<>();
+        for (String p : parts) {
+            String item = p.trim().replaceAll("^(?:the|a|an)\\s+", "").trim();
+            if (!item.isEmpty()) out.add(item);
+        }
+        return out;
     }
 
     private boolean containsWord(String haystack, String word) {

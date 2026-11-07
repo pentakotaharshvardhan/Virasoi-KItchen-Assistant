@@ -34,6 +34,11 @@ void main() {
                 ),
               );
             }
+            if (settings.name == AppRoutes.recipeList) {
+              return MaterialPageRoute(
+                builder: (_) => const Scaffold(body: Text('RECIPE LIST')),
+              );
+            }
             return null;
           },
         ),
@@ -102,6 +107,19 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('ING:recipe-1'), findsOneWidget);
+  });
+
+  testWidgets('multiple generated recipes navigate to the saved recipes list', (tester) async {
+    await tester.pumpWidget(harness());
+    await tester.pumpAndSettle();
+    await addDish(tester, 'Paneer');
+    await addDish(tester, 'Naan');
+
+    await tester.tap(find.text('Generate Recipes'));
+    await tester.pumpAndSettle();
+
+    expect(service.generatedDishNames, ['Paneer', 'Naan']);
+    expect(find.text('RECIPE LIST'), findsOneWidget);
   });
 
   testWidgets('kitchen steppers persist through generation', (tester) async {

@@ -178,6 +178,7 @@ class FakeRecipeService extends RecipeService {
   int listCalls = 0;
   int byIdCalls = 0;
   int generateCalls = 0;
+  final List<String> generatedDishNames = [];
   String? lastSearch;
   RecipeSortOption? lastSort;
   String? lastGenerateDish;
@@ -206,7 +207,10 @@ class FakeRecipeService extends RecipeService {
   Future<Result<RecipeModel>> generateRecipe({required String dishName}) async {
     generateCalls++;
     lastGenerateDish = dishName;
-    if (generateDelay > Duration.zero) await Future<void>.delayed(generateDelay);
+    generatedDishNames.add(dishName);
+    if (generateDelay > Duration.zero) {
+      await Future<void>.delayed(generateDelay);
+    }
     return generateResult;
   }
 

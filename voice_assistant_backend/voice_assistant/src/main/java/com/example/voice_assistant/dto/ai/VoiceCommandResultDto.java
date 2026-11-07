@@ -1,11 +1,14 @@
 package com.example.voice_assistant.dto.ai;
 
+import java.util.List;
+
 public class VoiceCommandResultDto {
-    /** NEXT, WAIT, TIMER_YES, TIMER_NO, REPEAT, STOP, REMOVE, HELP, UNKNOWN */
+    /** NEXT, WAIT, TIMER_YES, TIMER_NO, REPEAT, STOP, REMOVE, REMAINING_ITEMS, HELP, UNKNOWN */
     public String command;
     public Integer stoveIndex;
     public String dishName;
     public String ingredientName;
+    public List<String> ingredientNames;
     public Integer timerSeconds;
     /** Only set when command == HELP: Gemini's direct answer to the user's app-usage question. */
     public String helpResponse;

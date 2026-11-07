@@ -1,7 +1,6 @@
 import 'package:ai_assistant_frontend/core/utils/secure_storage.dart';
 import 'package:ai_assistant_frontend/view_models/voice_viewmodel.dart';
 import 'package:ai_assistant_frontend/views/voice/voice_assistant_page.dart';
-import 'package:ai_assistant_frontend/widgets/voice_orb.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
@@ -34,7 +33,7 @@ void main() {
         ),
       );
 
-  /// The VoiceOrb animates forever, so `pumpAndSettle` can never be used here.
+  /// The listening indicator pulses forever, so `pumpAndSettle` can never be used here.
   Future<void> start(WidgetTester tester, {bool helpMode = false}) async {
     await tester.pumpWidget(harness(helpMode: helpMode));
     await tester.pump();
@@ -48,10 +47,12 @@ void main() {
     vm.dispose();
   }
 
-  testWidgets('renders the orb and starts listening automatically', (tester) async {
+  testWidgets('renders the chat input and starts listening automatically', (tester) async {
     await start(tester);
 
-    expect(find.byType(VoiceOrb), findsOneWidget);
+    expect(find.byType(TextField), findsOneWidget);
+    // While listening the mic button shows the stop symbol.
+    expect(find.byIcon(Icons.stop_rounded), findsOneWidget);
     expect(find.text("I'm listening..."), findsOneWidget);
     expect(voice.startCalls, greaterThanOrEqualTo(1));
 
@@ -91,14 +92,16 @@ void main() {
     await finish(tester);
   });
 
-  testWidgets('opens the in-memory conversation sheet', (tester) async {
+  testWidgets('the top-right button expands the recipe steps panel', (tester) async {
     await start(tester);
 
-    await tester.tap(find.byIcon(Icons.forum_outlined));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.text('Recipe steps'), findsNothing);
 
-    expect(find.text('Conversation (not saved)'), findsOneWidget);
+    await tester.tap(find.byIcon(Icons.menu_book_rounded));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(find.text('Recipe steps'), findsOneWidget);
 
     await finish(tester);
   });

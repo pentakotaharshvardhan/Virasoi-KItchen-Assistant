@@ -71,8 +71,8 @@ class VoiceService implements VoiceEngine {
     await _speech.listen(
       onResult: (r) => onResult(r.recognizedWords, r.finalResult),
       listenOptions: stt.SpeechListenOptions(
-        listenFor: const Duration(seconds: 30),
-        pauseFor: const Duration(seconds: 4),
+        listenFor: const Duration(seconds: 60),
+        pauseFor: const Duration(seconds: 20),
         partialResults: true,
         onDevice: true,
       ),

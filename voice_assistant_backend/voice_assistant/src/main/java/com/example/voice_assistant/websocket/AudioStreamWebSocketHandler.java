@@ -18,7 +18,9 @@ import org.springframework.web.socket.handler.TextWebSocketHandler;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.net.URI;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -227,6 +229,7 @@ public class AudioStreamWebSocketHandler extends TextWebSocketHandler {
         } catch (Exception e) {
             command = VoiceCommandService.Command.UNKNOWN;
         }
+        UUID sessionId = extractSessionId(session);
 
         if (command == VoiceCommandService.Command.HELP) {
             String answer = (parsed.helpResponse != null && !parsed.helpResponse.isBlank())
@@ -237,17 +240,14 @@ public class AudioStreamWebSocketHandler extends TextWebSocketHandler {
         }
 
         if (command == VoiceCommandService.Command.REMOVE) {
-            // The pantry/checklist lives on the Flutter Ingredient screen, not the server. Broadcast
-            // the understood ingredient to the other sockets in this session (the Ingredient screen
-            // listens there) and acknowledge on the speaker's socket.
-            String ingredient = parsed.ingredientName == null ? "" : parsed.ingredientName.trim();
-            String message = ingredient.isEmpty()
-                    ? "Which ingredient should I remove?"
-                    : "Okay, removing " + ingredient + " from your list.";
-            UUID sessionId = extractSessionId(session);
-            broadcast(sessionId, "remove_ingredient",
-                    Map.of("ingredientName", ingredient, "message", message), session);
-            sendPrompt(session, "remove_ingredient", message);
+            handleRemove(session, sessionId, parsed);
+            return;
+        }
+
+        if (command == VoiceCommandService.Command.REMAINING_ITEMS) {
+            // The checklist itself lives on the Flutter Ingredient screen - ask it to read out
+            // whatever is still pending.
+            handleRemainingItems(session);
             return;
         }
 
@@ -257,12 +257,45 @@ public class AudioStreamWebSocketHandler extends TextWebSocketHandler {
             return;
         }
 
-        UUID sessionId = extractSessionId(session);
         if (sessionId == null) {
             send(session, "error", Map.of("message", "sessionId query param is required for cooking commands"));
             return;
         }
         handleParsedStepCommand(session, sessionId, transcript, Map.of(), parsed);
+    }
+
+    /** Broadcasts every understood ingredient (single OR multiple) to the Ingredient screen's
+     *  socket and acknowledges on the speaker's socket. */
+    private void handleRemove(WebSocketSession session, UUID sessionId, VoiceCommandResultDto parsed) throws Exception {
+        List<String> names = new ArrayList<>();
+        if (parsed.ingredientNames != null) {
+            for (String n : parsed.ingredientNames) {
+                if (n != null && !n.isBlank()) names.add(n.trim());
+            }
+        }
+        if (names.isEmpty() && parsed.ingredientName != null && !parsed.ingredientName.isBlank()) {
+            names.add(parsed.ingredientName.trim());
+        }
+
+        String message = names.isEmpty()
+                ? "Which ingredient should I remove?"
+                : "Okay, removing " + joinNames(names) + " from your list.";
+
+        broadcast(sessionId, "remove_ingredient", Map.of(
+                "ingredientNames", names,
+                "ingredientName", names.isEmpty() ? "" : names.get(0),
+                "message", message), null);
+        sendPrompt(session, "remove_ingredient", message);
+    }
+
+    private void handleRemainingItems(WebSocketSession session) throws Exception {
+        send(session, "remaining_items_request", Map.of("message", "Which items are still on the list?"));
+    }
+
+    private static String joinNames(List<String> names) {
+        if (names.size() == 1) return names.get(0);
+        if (names.size() == 2) return names.get(0) + " and " + names.get(1);
+        return String.join(", ", names.subList(0, names.size() - 1)) + " and " + names.get(names.size() - 1);
     }
 
     private void handleStepCommand(WebSocketSession session, UUID sessionId, String transcript, Map<String, Object> meta) throws Exception {
@@ -288,13 +321,11 @@ public class AudioStreamWebSocketHandler extends TextWebSocketHandler {
             return;
         }
         if (command == VoiceCommandService.Command.REMOVE) {
-            String ingredient = parsed.ingredientName == null ? "" : parsed.ingredientName.trim();
-            String message = ingredient.isEmpty()
-                    ? "Which ingredient should I remove?"
-                    : "Okay, removing " + ingredient + " from your list.";
-            broadcast(sessionId, "remove_ingredient",
-                    Map.of("ingredientName", ingredient, "message", message), session);
-            sendPrompt(session, "remove_ingredient", message);
+            handleRemove(session, sessionId, parsed);
+            return;
+        }
+        if (command == VoiceCommandService.Command.REMAINING_ITEMS) {
+            handleRemainingItems(session);
             return;
         }
 
@@ -398,7 +429,7 @@ public class AudioStreamWebSocketHandler extends TextWebSocketHandler {
         send(session, "prompt", data);
     }
 
-    /** Sends a message to every socket registered for this session except the originating one. */
+    /** Sends a message to every socket registered for this session. */
     private void broadcast(UUID sessionId, String type, Object data, WebSocketSession exclude) throws Exception {
         if (sessionId == null) return;
         String payload = objectMapper.writeValueAsString(Map.of("type", type, "data", data));

@@ -71,12 +71,23 @@ class AiAssistantApp extends StatelessWidget {
               final args = settings.arguments;
               String? sid;
               bool help = false;
+              bool awaitingReady = false;
+              String? recipeId;
               if (args is String) sid = args;
               if (args is Map) {
                 sid = args['sessionId'] as String?;
                 help = args['helpMode'] as bool? ?? false;
+                awaitingReady = args['awaitingReady'] as bool? ?? false;
+                recipeId = args['recipeId'] as String?;
               }
-              return MaterialPageRoute(builder: (_) => VoiceAssistantPage(sessionId: sid, helpMode: help));
+              return MaterialPageRoute(
+                builder: (_) => VoiceAssistantPage(
+                  sessionId: sid,
+                  helpMode: help,
+                  awaitingReady: awaitingReady,
+                  recipeId: recipeId,
+                ),
+              );
             case AppRoutes.settings:
               return MaterialPageRoute(builder: (_) => const SettingsPage());
             case AppRoutes.help:

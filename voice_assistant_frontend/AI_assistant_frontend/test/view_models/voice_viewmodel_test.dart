@@ -93,14 +93,14 @@ void main() {
       expect(vm.state, VoiceState.thinking);
     });
 
-    test('sends after 10 seconds of unchanged partial text', () {
+    test('sends after 20 seconds of unchanged partial text', () {
       fakeAsync((async) {
         final vm = buildViewModel();
         vm.init('s');
         async.flushMicrotasks();
 
         voice.emitResult('I have onions');
-        async.elapse(const Duration(seconds: 9));
+        async.elapse(const Duration(seconds: 19));
         expect(ws.sent, isEmpty);
 
         async.elapse(const Duration(seconds: 2));
@@ -109,7 +109,7 @@ void main() {
       });
     });
 
-    test('changing the partial text restarts the 10 second window', () {
+    test('changing the partial text restarts the 20 second window', () {
       fakeAsync((async) {
         final vm = buildViewModel();
         vm.init('s');
@@ -118,12 +118,28 @@ void main() {
         voice.emitResult('I have');
         async.elapse(const Duration(seconds: 5));
         voice.emitResult('I have onions');
-        async.elapse(const Duration(seconds: 9));
+        async.elapse(const Duration(seconds: 19));
         expect(ws.sent, isEmpty);
 
         async.elapse(const Duration(seconds: 2));
         async.flushMicrotasks();
         expect(ws.sent, hasLength(1));
+      });
+    });
+
+    test('final recognition segments are retained in the submitted transcript',
+        () {
+      fakeAsync((async) {
+        final vm = buildViewModel();
+        vm.init('s');
+        async.flushMicrotasks();
+
+        voice.emitResult('remove onions');
+        voice.emitResult('and tomatoes', isFinal: true);
+
+        async.flushMicrotasks();
+        final payload = ws.sent.single as Map<String, dynamic>;
+        expect(payload['text'], 'remove onions and tomatoes');
       });
     });
 
@@ -152,7 +168,7 @@ void main() {
       expect(voice.startCalls, startsBefore + 1);
     });
 
-    test('does not restart listening when STT stops with pending text', () async {
+    test('restarts listening without losing pending transcript text', () async {
       final vm = buildViewModel();
       await vm.init('s');
       voice.emitResult('half a sentence');
@@ -161,7 +177,8 @@ void main() {
       voice.emitStatus('notListening');
       await flush();
 
-      expect(voice.startCalls, startsBefore);
+      expect(voice.startCalls, startsBefore + 1);
+      expect(vm.liveTranscript, 'half a sentence');
     });
   });
 
@@ -204,6 +221,24 @@ void main() {
       await flush();
 
       expect(vm.transcript, isEmpty);
+    });
+
+    test('forwards multi-item removal broadcasts to the ingredient checklist',
+        () async {
+      final vm = buildViewModel();
+      final removed = <String>[];
+      vm.onIngredientsRemoved = removed.addAll;
+      await vm.init('s');
+
+      ws.emit({
+        'type': 'remove_ingredient',
+        'data': {
+          'ingredientNames': ['onion', 'tomato']
+        },
+      });
+      await flush();
+
+      expect(removed, ['onion', 'tomato']);
     });
 
     test('speaks a prompt message', () async {
@@ -392,6 +427,187 @@ void main() {
 
       expect(ws.disposeCalls, 1);
       expect(voice.disposed, isTrue);
+    });
+  });
+
+  group('ready check', () {
+    test('"yes" fires the onReady callback and stops asking', () async {
+      final vm = buildViewModel();
+      await vm.init('s');
+      var readyCalls = 0;
+      await vm.beginReadyCheck(onReady: () async {
+        readyCalls++;
+      });
+
+      expect(vm.readyCheckActive, isTrue);
+      expect(voice.spoken.last, contains('ready to start cooking'));
+
+      // Let the announcement finish and the mic come back before answering.
+      await flush();
+      voice.emitResult('yes', isFinal: true);
+      await flush();
+      await flush();
+
+      expect(readyCalls, 1);
+      expect(vm.readyCheckActive, isFalse);
+      expect(ws.sent, isEmpty, reason: 'the answer must never hit the backend');
+    });
+
+    test('"not yet" keeps the question open', () async {
+      final vm = buildViewModel();
+      await vm.init('s');
+      var readyCalls = 0;
+      await vm.beginReadyCheck(onReady: () async {
+        readyCalls++;
+      });
+
+      await flush();
+      voice.emitResult('not yet', isFinal: true);
+      await flush();
+      await flush();
+
+      expect(readyCalls, 0);
+      expect(vm.readyCheckActive, isTrue);
+      expect(voice.spoken.last, contains('take your time'));
+      expect(ws.sent, isEmpty);
+    });
+
+    test('an unclear answer re-asks the question', () async {
+      final vm = buildViewModel();
+      await vm.init('s');
+      var readyCalls = 0;
+      await vm.beginReadyCheck(onReady: () async {
+        readyCalls++;
+      });
+
+      await flush();
+      voice.emitResult('hmm', isFinal: true);
+      await flush();
+      await flush();
+
+      expect(readyCalls, 0);
+      expect(vm.readyCheckActive, isTrue);
+      expect(voice.spoken.last, contains('yes or no'));
+      expect(ws.sent, isEmpty);
+    });
+  });
+
+  group('remaining items', () {
+    test('backend request reads out the pending ingredient list', () async {
+      final vm = buildViewModel();
+      await vm.init('s');
+      vm.onRemainingItemsRequest = () async => ['Onion', 'Tomato'];
+
+      ws.emit({
+        'type': 'remaining_items_request',
+        'data': {'message': 'Which items are still on the list?'},
+      });
+      await flush();
+      await flush();
+
+      expect(voice.spoken.last, 'You still need: Onion, Tomato.');
+      expect(vm.transcript.last.text, 'You still need: Onion, Tomato.');
+    });
+
+    test('an empty list is answered gracefully', () async {
+      final vm = buildViewModel();
+      await vm.init('s');
+      vm.onRemainingItemsRequest = () async => [];
+
+      ws.emit({
+        'type': 'remaining_items_request',
+        'data': {'message': 'x'}
+      });
+      await flush();
+      await flush();
+
+      expect(voice.spoken.last, contains('nothing is left'));
+    });
+
+    test('a missing callback still produces a spoken answer', () async {
+      final vm = buildViewModel();
+      await vm.init('s');
+
+      ws.emit({
+        'type': 'remaining_items_request',
+        'data': {'message': 'x'}
+      });
+      await flush();
+      await flush();
+
+      expect(voice.spoken.last, contains('nothing is left'));
+    });
+  });
+
+  group('session snapshots', () {
+    test('a snapshot is stored for the steps panel and its message is spoken',
+        () async {
+      final vm = buildViewModel();
+      await vm.init('s');
+
+      ws.emit({
+        'type': 'session_snapshot',
+        'data': {
+          'message': 'Chop the onions.',
+          'dishes': [
+            {
+              'name': 'Soup',
+              'totalSteps': 3,
+              'completedSteps': 1,
+              'status': 'RUNNING'
+            },
+          ],
+        },
+      });
+      await flush();
+
+      expect(vm.lastSnapshot, isNotNull);
+      expect(vm.lastSnapshot!['message'], 'Chop the onions.');
+      expect(
+        (vm.lastSnapshot!['dishes'] as List).single['completedSteps'],
+        1,
+      );
+      expect(voice.spoken.last, 'Chop the onions.');
+    });
+
+    test('init resets a stale snapshot from a previous session', () async {
+      final vm = buildViewModel();
+      await vm.init('s');
+      ws.emit({
+        'type': 'session_snapshot',
+        'data': {'message': 'Old session.'},
+      });
+      await flush();
+      expect(vm.lastSnapshot, isNotNull);
+
+      await vm.init(null);
+      expect(vm.lastSnapshot, isNull);
+    });
+  });
+
+  group('typed input', () {
+    test('sendTypedText goes through the same pipeline as speech', () async {
+      final vm = buildViewModel();
+      await vm.init('s');
+
+      vm.sendTypedText('  next  ');
+      await flush();
+
+      final payload = ws.sent.single as Map<String, dynamic>;
+      expect(payload['type'], 'user_text');
+      expect(payload['text'], 'next');
+      expect(vm.transcript.single.text, 'next');
+      expect(vm.transcript.single.sender, ChatSender.user);
+    });
+
+    test('blank input is ignored', () async {
+      final vm = buildViewModel();
+      await vm.init('s');
+
+      vm.sendTypedText('   ');
+
+      expect(ws.sent, isEmpty);
+      expect(vm.transcript, isEmpty);
     });
   });
 }

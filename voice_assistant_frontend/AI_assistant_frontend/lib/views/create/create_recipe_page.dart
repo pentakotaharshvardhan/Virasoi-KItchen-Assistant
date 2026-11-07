@@ -60,7 +60,11 @@ class _CreateRecipePageState extends State<CreateRecipePage> {
     
     if (!mounted) return;
     if (ok && vm.generated.isNotEmpty) {
-      Navigator.pushNamed(context, AppRoutes.ingredients, arguments: vm.generated.first.id);
+      if (vm.generated.length == 1) {
+        Navigator.pushNamed(context, AppRoutes.ingredients, arguments: vm.generated.first.id);
+      } else {
+        Navigator.pushNamed(context, AppRoutes.recipeList);
+      }
     } else if (vm.errorMessage != null) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(vm.errorMessage!)));
     }
@@ -159,7 +163,7 @@ class _CreateRecipePageState extends State<CreateRecipePage> {
                     const SizedBox(height: 40),
                     
                     GradientButton(
-                      label: 'Generate Recipe', 
+                      label: vm.selectedDishes.length > 1 ? 'Generate Recipes' : 'Generate Recipe',
                       icon: Icons.auto_awesome, 
                       isLoading: vm.isSubmitting, 
                       onPressed: _start,

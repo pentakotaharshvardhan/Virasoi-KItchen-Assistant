@@ -68,6 +68,7 @@ class CreateRecipeViewModel extends ChangeNotifier {
   }
 
   Future<bool> submit({required int stoveCount, required int servingCount}) async {
+    if (isSubmitting) return false;
     if (selectedDishes.isEmpty) {
       errorMessage = 'Please add at least one dish.';
       notifyListeners();
@@ -83,22 +84,26 @@ class CreateRecipeViewModel extends ChangeNotifier {
     servings = servingCount;
     await _storage.saveSettings(stoves: stoves, servings: servings);
 
-    // If multiple dishes are selected, we join them with commas as per previous logic
-    // or send the first one depending on backend capabilities.
-    // Given the previous requirement of CSV, we'll join them.
-    final dishNameCsv = selectedDishes.join(', ');
-
-    final result = await _service.generateRecipe(dishName: dishNameCsv);
-    isSubmitting = false;
-    switch (result) {
-      case Success(data: final recipe):
-        generated = [recipe];
-        notifyListeners();
-        return true;
-      case Failure(message: final m):
-        errorMessage = m;
-        notifyListeners();
-        return false;
+    generated = [];
+    for (final dishName in selectedDishes) {
+      final result = await _service.generateRecipe(dishName: dishName);
+      switch (result) {
+        case Success(data: final recipe):
+          generated.add(recipe);
+          notifyListeners();
+          break;
+        case Failure(message: final message):
+          isSubmitting = false;
+          errorMessage = selectedDishes.length == 1
+              ? message
+              : 'Could not generate "$dishName": $message';
+          notifyListeners();
+          return false;
+      }
     }
+
+    isSubmitting = false;
+    notifyListeners();
+    return true;
   }
 }
