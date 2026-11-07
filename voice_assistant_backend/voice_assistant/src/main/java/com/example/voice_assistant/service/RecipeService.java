@@ -48,27 +48,51 @@ public class RecipeService {
         return recipeRepository.findAll();
     }
 
+    /** Every recipe saved by the given app user, newest first. */
+    public List<Recipe> listByUserId(String userId) {
+        return recipeRepository.findByUserIdOrderByCreatedAtDesc(userId);
+    }
+
     /** Formats a raw ancestor-recipe transcript via AI and persists it. */
     @Transactional
     public Recipe uploadAncestorRecipe(String rawTranscript, String dishNameHint, String createdBy) {
+        return uploadAncestorRecipe(rawTranscript, dishNameHint, createdBy, null);
+    }
+
+    /** Formats a raw ancestor-recipe transcript via AI and persists it for the given user. */
+    @Transactional
+    public Recipe uploadAncestorRecipe(String rawTranscript, String dishNameHint, String createdBy, String userId) {
         AiFormattingService.AiFormattingResult result = aiFormattingService.formatAncestorRecipe(rawTranscript, dishNameHint);
-        return saveFromAi(result, RecipeSource.ANCESTOR, createdBy);
+        return saveFromAi(result, RecipeSource.ANCESTOR, createdBy, userId);
     }
 
     /** Generates a brand-new recipe via AI (used when a requested dish isn't found) and persists it. */
     @Transactional
     public Recipe generateAndSaveRecipe(String dishName) {
+        return generateAndSaveRecipe(dishName, null);
+    }
+
+    /** Generates a brand-new recipe via AI and persists it for the given user. */
+    @Transactional
+    public Recipe generateAndSaveRecipe(String dishName, String userId) {
         AiFormattingService.AiFormattingResult result = aiFormattingService.generateRecipe(dishName);
-        return saveFromAi(result, RecipeSource.AI_GENERATED, "AI");
+        return saveFromAi(result, RecipeSource.AI_GENERATED, "AI", userId);
     }
 
     /** Looks a dish up in the DB; if missing, asks the AI to generate + persist a new one. Core "find or create" flow. */
     @Transactional
     public Recipe findOrGenerate(String dishName) {
-        return findByDishName(dishName).orElseGet(() -> generateAndSaveRecipe(dishName));
+        return findOrGenerate(dishName, null);
     }
 
-    private Recipe saveFromAi(AiFormattingService.AiFormattingResult result, RecipeSource source, String createdBy) {
+    /** Looks a dish up in the DB for the given user; if missing, asks the AI to generate + persist it. */
+    @Transactional
+    public Recipe findOrGenerate(String dishName, String userId) {
+        return findByDishName(dishName).orElseGet(() -> generateAndSaveRecipe(dishName, userId));
+    }
+
+    private Recipe saveFromAi(AiFormattingService.AiFormattingResult result, RecipeSource source,
+                              String createdBy, String userId) {
         AiRecipeResponseDto ai = result.recipe();
         if (ai.dishName == null || ai.dishName.isBlank()) {
             throw new IllegalStateException("AI response did not include a dish name");
@@ -83,6 +107,10 @@ public class RecipeService {
         recipe.setBaseServes(1);
         recipe.setSource(source);
         recipe.setCreatedBy(createdBy);
+        // Keep the original owner if the dish already exists.
+        if (userId != null && !userId.isBlank() && recipe.getUserId() == null) {
+            recipe.setUserId(userId);
+        }
         recipe.setRawAiJson(result.rawJson());
 
         recipe.getIngredients().clear();

@@ -14,7 +14,8 @@ import 'package:http/http.dart' as http;
 import 'fixtures.dart';
 
 http.Response jsonResponse(Object body, {int status = 200}) =>
-    http.Response(jsonEncode(body), status, headers: {'content-type': 'application/json'});
+    http.Response(jsonEncode(body), status,
+        headers: {'content-type': 'application/json'});
 
 /// A WebSocket stand-in. Extends the real service so ViewModels can accept
 /// it through the same factory type, but never touches the network.
@@ -176,12 +177,15 @@ class FakeRecipeService extends RecipeService {
   Duration generateDelay = Duration.zero;
 
   int listCalls = 0;
+  int listByUserCalls = 0;
   int byIdCalls = 0;
   int generateCalls = 0;
   final List<String> generatedDishNames = [];
   String? lastSearch;
   RecipeSortOption? lastSort;
+  String? lastUserId;
   String? lastGenerateDish;
+  String? lastGenerateUserId;
   String? lastRequestedId;
 
   @override
@@ -197,6 +201,14 @@ class FakeRecipeService extends RecipeService {
   }
 
   @override
+  Future<Result<List<RecipeModel>>> getRecipesByUserId(String userId) async {
+    listByUserCalls++;
+    lastUserId = userId;
+    if (listDelay > Duration.zero) await Future<void>.delayed(listDelay);
+    return listResult;
+  }
+
+  @override
   Future<Result<RecipeModel>> getRecipeById(String id) async {
     byIdCalls++;
     lastRequestedId = id;
@@ -204,9 +216,13 @@ class FakeRecipeService extends RecipeService {
   }
 
   @override
-  Future<Result<RecipeModel>> generateRecipe({required String dishName}) async {
+  Future<Result<RecipeModel>> generateRecipe({
+    required String dishName,
+    String? userId,
+  }) async {
     generateCalls++;
     lastGenerateDish = dishName;
+    lastGenerateUserId = userId;
     generatedDishNames.add(dishName);
     if (generateDelay > Duration.zero) {
       await Future<void>.delayed(generateDelay);
@@ -224,8 +240,7 @@ class FakeRecipeService extends RecipeService {
 }
 
 class FakeIngredientService extends IngredientService {
-  Result<RecipeModel> result =
-      Success(recipeWithIngredients([]));
+  Result<RecipeModel> result = Success(recipeWithIngredients([]));
   int calls = 0;
   String? lastRecipeId;
 

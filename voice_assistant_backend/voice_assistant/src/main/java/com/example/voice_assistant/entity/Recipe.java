@@ -39,6 +39,10 @@ public class Recipe {
     @Column(name = "created_by")
     private String createdBy;
 
+    /** App user (JWT userId) who saved this recipe; used to show each user only their own list. */
+    @Column(name = "user_id")
+    private String userId;
+
     /** Raw JSON returned by the AI, kept for audit/debugging purposes. */
     @Column(name = "raw_ai_json", columnDefinition = "TEXT")
     private String rawAiJson;
@@ -83,6 +87,8 @@ public class Recipe {
     public void setSource(RecipeSource source) { this.source = source; }
     public String getCreatedBy() { return createdBy; }
     public void setCreatedBy(String createdBy) { this.createdBy = createdBy; }
+    public String getUserId() { return userId; }
+    public void setUserId(String userId) { this.userId = userId; }
     public String getRawAiJson() { return rawAiJson; }
     public void setRawAiJson(String rawAiJson) { this.rawAiJson = rawAiJson; }
     public Instant getCreatedAt() { return createdAt; }

@@ -15,10 +15,12 @@ class ApiConstants {
   ApiConstants._();
 
   /// Base REST url (Swagger "servers" value).
-  static const String baseUrl = 'https://virasoi-kitchen-assistant.onrender.com';
+  static const String baseUrl =
+      'https://virasoi-kitchen-assistant.onrender.com';
 
   /// Base WS url — same host, ws(s) scheme.
-  static const String baseWsUrl = 'wss://virasoi-kitchen-assistant.onrender.com';
+  static const String baseWsUrl =
+      'wss://virasoi-kitchen-assistant.onrender.com';
 
   // ---------------------------------------------------------------------
   // AUTH (auth-controller)
@@ -30,6 +32,7 @@ class ApiConstants {
   // RECIPES (recipe-controller)
   // ---------------------------------------------------------------------
   static const String recipes = '/api/recipes';
+  static String recipesByUser(String userId) => '/api/recipes/user/$userId';
   static String recipeById(String id) => '/api/recipes/$id';
   static const String searchRecipes = '/api/recipes/search';
   static const String generateRecipe = '/api/recipes/generate';
@@ -44,13 +47,13 @@ class ApiConstants {
   static String sessionStatus(String id) => '/api/sessions/$id/status';
   static String sessionDishes(String id) => '/api/sessions/$id/dishes';
   static String sessionTick(String id) => '/api/sessions/$id/tick';
-  static String sessionStepWait(String sessionId, String stepId) => 
+  static String sessionStepWait(String sessionId, String stepId) =>
       '/api/sessions/$sessionId/steps/$stepId/wait';
-  static String sessionStepTimerStart(String sessionId, String stepId) => 
+  static String sessionStepTimerStart(String sessionId, String stepId) =>
       '/api/sessions/$sessionId/steps/$stepId/timer/start';
-  static String sessionStepComplete(String sessionId, String stepId) => 
+  static String sessionStepComplete(String sessionId, String stepId) =>
       '/api/sessions/$sessionId/steps/$stepId/complete';
-  static String sessionStoveStatus(String sessionId, int stoveIndex) => 
+  static String sessionStoveStatus(String sessionId, int stoveIndex) =>
       '/api/sessions/$sessionId/stoves/$stoveIndex';
 
   // ---------------------------------------------------------------------
@@ -72,13 +75,14 @@ class ApiConstants {
   // ---------------------------------------------------------------------
   static const String unsplashBaseUrl = 'https://api.unsplash.com';
   static const String unsplashSearchPhotos = '/search/photos';
-  static const String unsplashAccessKey = 'i9I0G5k1YeBMgiX5fsBa2LKwCMmgILMSI36mrP7hcbg';
+  static const String unsplashAccessKey =
+      'i9I0G5k1YeBMgiX5fsBa2LKwCMmgILMSI36mrP7hcbg';
 
   // ---------------------------------------------------------------------
   // VOICE ASSISTANT (WebSocket)
   // ---------------------------------------------------------------------
   /// Backend expects: /ws/audio?token=<jwt>&sessionId=<uuid>
-  static String wsVoiceAssistant(String token, String sessionId) => 
+  static String wsVoiceAssistant(String token, String sessionId) =>
       '$baseWsUrl/ws/audio?token=$token&sessionId=$sessionId';
 
   static const Duration requestTimeout = Duration(seconds: 20);

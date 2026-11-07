@@ -23,6 +23,19 @@ void main() {
     expect(recipes.map((r) => r.id), ['r-1', 'r-2']);
   });
 
+  test('getRecipesByUserId hits the user recipes path', () async {
+    late Uri requested;
+    final api = ApiClient.withClient(MockClient((request) async {
+      requested = request.url;
+      return jsonResponse([recipeJson(id: 'r-7')]);
+    }));
+
+    final result = await RecipeService(api: api).getRecipesByUserId('user-42');
+
+    expect(requested.path, '/api/recipes/user/user-42');
+    expect((result as Success<List<RecipeModel>>).data.single.id, 'r-7');
+  });
+
   test('getRecipes also accepts a paginated items wrapper', () async {
     final api = ApiClient.withClient(MockClient(
       (_) async => jsonResponse({
@@ -94,10 +107,24 @@ void main() {
       return jsonResponse(recipeJson(dishName: 'Dal Makhani'));
     }));
 
-    final result = await RecipeService(api: api).generateRecipe(dishName: 'Dal Makhani');
+    final result =
+        await RecipeService(api: api).generateRecipe(dishName: 'Dal Makhani');
 
     expect(body, {'dishName': 'Dal Makhani'});
     expect((result as Success<RecipeModel>).data.dishName, 'Dal Makhani');
+  });
+
+  test('generateRecipe includes the userId when one is provided', () async {
+    late Map<String, dynamic> body;
+    final api = ApiClient.withClient(MockClient((request) async {
+      body = jsonDecode(request.body) as Map<String, dynamic>;
+      return jsonResponse(recipeJson(dishName: 'Dal Makhani'));
+    }));
+
+    await RecipeService(api: api)
+        .generateRecipe(dishName: 'Dal Makhani', userId: 'user-42');
+
+    expect(body, {'dishName': 'Dal Makhani', 'userId': 'user-42'});
   });
 
   test('findOrGenerateRecipe posts to its own endpoint', () async {
@@ -114,7 +141,8 @@ void main() {
 
   test('propagates failures from the backend', () async {
     final api = ApiClient.withClient(
-      MockClient((_) async => jsonResponse({'message': 'Recipe not found'}, status: 404)),
+      MockClient((_) async =>
+          jsonResponse({'message': 'Recipe not found'}, status: 404)),
     );
 
     final result = await RecipeService(api: api).getRecipeById('missing');

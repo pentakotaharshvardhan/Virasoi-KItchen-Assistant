@@ -1,14 +1,18 @@
 import 'package:flutter/material.dart';
 import '../core/utils/result.dart';
+import '../core/utils/secure_storage.dart';
 import '../models/recipe_model.dart';
 import '../services/recipe_service.dart';
 
 enum ListStatus { loading, loaded, error }
 
 class RecipeListViewModel extends ChangeNotifier {
-  RecipeListViewModel({RecipeService? service}) : _service = service ?? RecipeService();
+  RecipeListViewModel({RecipeService? service, SecureStorage? storage})
+      : _service = service ?? RecipeService(),
+        _storage = storage ?? SecureStorage.instance;
 
   final RecipeService _service;
+  final SecureStorage _storage;
 
   ListStatus status = ListStatus.loading;
   String? errorMessage;
@@ -21,7 +25,14 @@ class RecipeListViewModel extends ChangeNotifier {
   Future<void> load() async {
     status = ListStatus.loading;
     notifyListeners();
-    final result = await _service.getRecipes();
+    final userId = await _storage.userId;
+    if (userId == null || userId.isEmpty) {
+      _all = [];
+      status = ListStatus.loaded;
+      _applyFilters();
+      return;
+    }
+    final result = await _service.getRecipesByUserId(userId);
     switch (result) {
       case Success(data: final recipes):
         _all = recipes;
@@ -47,7 +58,9 @@ class RecipeListViewModel extends ChangeNotifier {
   }
 
   void _applyFilters() {
-    var list = _all.where((r) => r.title.toLowerCase().contains(searchQuery.toLowerCase())).toList();
+    var list = _all
+        .where((r) => r.title.toLowerCase().contains(searchQuery.toLowerCase()))
+        .toList();
     switch (sort) {
       case RecipeSortOption.timeAsc:
         list.sort((a, b) => a.createdAt.compareTo(b.createdAt));
@@ -56,7 +69,8 @@ class RecipeListViewModel extends ChangeNotifier {
         list.sort((a, b) => b.createdAt.compareTo(a.createdAt));
         break;
       case RecipeSortOption.alphabetical:
-        list.sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
+        list.sort(
+            (a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
         break;
       case RecipeSortOption.totalTime:
         list.sort((a, b) => a.totalTimeMinutes.compareTo(b.totalTimeMinutes));

@@ -10,7 +10,8 @@ class RecipeService {
 
   final ApiClient _api;
 
-  Future<Result<List<RecipeModel>>> getRecipes({String? search, RecipeSortOption? sort}) async {
+  Future<Result<List<RecipeModel>>> getRecipes(
+      {String? search, RecipeSortOption? sort}) async {
     final query = <String, dynamic>{};
     if (search != null && search.isNotEmpty) query['search'] = search;
     if (sort != null) query['sort'] = _sortParam(sort);
@@ -26,22 +27,38 @@ class RecipeService {
     };
   }
 
+  Future<Result<List<RecipeModel>>> getRecipesByUserId(String userId) async {
+    final res = await _api.get(ApiConstants.recipesByUser(userId));
+    return switch (res) {
+      Success(data: final data) => Success(
+          ((data is List ? data : data['items'] ?? []) as List)
+              .map((e) => RecipeModel.fromJson(e as Map<String, dynamic>))
+              .toList(),
+        ),
+      Failure(message: final m) => Failure(m),
+    };
+  }
+
   Future<Result<RecipeModel>> getRecipeById(String id) async {
     final res = await _api.get(ApiConstants.recipeById(id));
     return switch (res) {
-      Success(data: final data) => Success(RecipeModel.fromJson(data as Map<String, dynamic>)),
+      Success(data: final data) =>
+        Success(RecipeModel.fromJson(data as Map<String, dynamic>)),
       Failure(message: final m) => Failure(m),
     };
   }
 
   Future<Result<RecipeModel>> generateRecipe({
     required String dishName,
+    String? userId,
   }) async {
     final res = await _api.post(ApiConstants.generateRecipe, body: {
       'dishName': dishName,
+      if (userId != null && userId.isNotEmpty) 'userId': userId,
     });
     return switch (res) {
-      Success(data: final data) => Success(RecipeModel.fromJson(data as Map<String, dynamic>)),
+      Success(data: final data) =>
+        Success(RecipeModel.fromJson(data as Map<String, dynamic>)),
       Failure(message: final m) => Failure(m),
     };
   }
@@ -53,7 +70,8 @@ class RecipeService {
       'dishName': dishName,
     });
     return switch (res) {
-      Success(data: final data) => Success(RecipeModel.fromJson(data as Map<String, dynamic>)),
+      Success(data: final data) =>
+        Success(RecipeModel.fromJson(data as Map<String, dynamic>)),
       Failure(message: final m) => Failure(m),
     };
   }

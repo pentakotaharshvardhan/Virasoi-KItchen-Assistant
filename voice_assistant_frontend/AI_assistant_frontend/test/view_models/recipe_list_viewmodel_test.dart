@@ -1,4 +1,5 @@
 import 'package:ai_assistant_frontend/core/utils/result.dart';
+import 'package:ai_assistant_frontend/core/utils/secure_storage.dart';
 import 'package:ai_assistant_frontend/services/recipe_service.dart';
 import 'package:ai_assistant_frontend/view_models/recipe_list_viewmodel.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -7,11 +8,14 @@ import '../helpers/fakes.dart';
 
 void main() {
   late FakeRecipeService service;
+  late SecureStorage storage;
   late RecipeListViewModel vm;
 
-  setUp(() {
+  setUp(() async {
     service = FakeRecipeService();
-    vm = RecipeListViewModel(service: service);
+    storage = SecureStorage.inMemory();
+    await storage.saveSession(accessToken: 'jwt', userId: 'user-42');
+    vm = RecipeListViewModel(service: service, storage: storage);
   });
 
   test('load exposes the recipes and reports loaded', () async {
@@ -20,7 +24,22 @@ void main() {
     expect(vm.status, ListStatus.loaded);
     expect(vm.visible.length, 3);
     expect(vm.errorMessage, isNull);
-    expect(service.listCalls, 1);
+    expect(service.listByUserCalls, 1);
+    expect(service.listCalls, 0);
+    expect(service.lastUserId, 'user-42');
+  });
+
+  test('load without a stored user id skips the API and shows nothing',
+      () async {
+    await storage.clear();
+    vm = RecipeListViewModel(service: service, storage: storage);
+
+    await vm.load();
+
+    expect(vm.status, ListStatus.loaded);
+    expect(vm.visible, isEmpty);
+    expect(service.listByUserCalls, 0);
+    expect(service.listCalls, 0);
   });
 
   test('load failure switches to error and keeps the message', () async {

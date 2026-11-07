@@ -32,6 +32,12 @@ public class RecipeController {
         return recipeService.listAll();
     }
 
+    /** Recipes added by one user only (the app's recipe list screen uses this). */
+    @GetMapping("/user/{userId}")
+    public List<Recipe> listByUser(@PathVariable String userId) {
+        return recipeService.listByUserId(userId);
+    }
+
     @GetMapping("/{id}")
     public Recipe getById(@PathVariable UUID id) {
         return recipeService.getById(id);
@@ -46,19 +52,20 @@ public class RecipeController {
     /** find-or-generate: looks the dish up, and if it's missing, asks the AI to create + save it on the spot. */
     @PostMapping("/find-or-generate")
     public Recipe findOrGenerate(@Valid @RequestBody GenerateRecipeRequest request) {
-        return recipeService.findOrGenerate(request.getDishName());
+        return recipeService.findOrGenerate(request.getDishName(), request.getUserId());
     }
 
     /** Forces a fresh AI-generated recipe even if one already exists (e.g. user wants a different variation). */
     @PostMapping("/generate")
     public Recipe generate(@Valid @RequestBody GenerateRecipeRequest request) {
-        return recipeService.generateAndSaveRecipe(request.getDishName());
+        return recipeService.generateAndSaveRecipe(request.getDishName(), request.getUserId());
     }
 
     /** REST fallback for uploading an ancestor recipe from already-transcribed text. */
     @PostMapping("/ancestor")
     public ResponseEntity<Recipe> uploadAncestorRecipe(@Valid @RequestBody AncestorRecipeUploadRequest request) {
-        Recipe saved = recipeService.uploadAncestorRecipe(request.getTranscriptText(), request.getDishNameHint(), request.getCreatedBy());
+        Recipe saved = recipeService.uploadAncestorRecipe(
+                request.getTranscriptText(), request.getDishNameHint(), request.getCreatedBy(), request.getUserId());
         return ResponseEntity.ok(saved);
     }
 }

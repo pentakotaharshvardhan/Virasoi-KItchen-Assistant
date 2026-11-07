@@ -1,5 +1,6 @@
 import 'package:ai_assistant_frontend/core/routes/app_routes.dart';
 import 'package:ai_assistant_frontend/core/utils/result.dart';
+import 'package:ai_assistant_frontend/core/utils/secure_storage.dart';
 import 'package:ai_assistant_frontend/services/recipe_service.dart';
 import 'package:ai_assistant_frontend/view_models/recipe_list_viewmodel.dart';
 import 'package:ai_assistant_frontend/views/recipe/recipe_list_page.dart';
@@ -15,9 +16,11 @@ void main() {
   late FakeRecipeService service;
   late RecipeListViewModel vm;
 
-  setUp(() {
+  setUp(() async {
     service = FakeRecipeService();
-    vm = RecipeListViewModel(service: service);
+    final storage = SecureStorage.inMemory();
+    await storage.saveSession(accessToken: 'jwt', userId: 'user-42');
+    vm = RecipeListViewModel(service: service, storage: storage);
   });
 
   Widget harness() => ChangeNotifierProvider<RecipeListViewModel>.value(
@@ -55,7 +58,8 @@ void main() {
     expect(find.text('OWN'), findsOneWidget);
   });
 
-  testWidgets('shows the empty state when there are no recipes', (tester) async {
+  testWidgets('shows the empty state when there are no recipes',
+      (tester) async {
     service.listResult = const Success([]);
     await tester.pumpWidget(harness());
     await tester.pumpAndSettle();
@@ -73,14 +77,14 @@ void main() {
 
     expect(find.text('No connection'), findsOneWidget);
     expect(find.text('Retry'), findsOneWidget);
-    expect(service.listCalls, 1);
+    expect(service.listByUserCalls, 1);
 
     service.listResult = Success(sampleRecipes());
     await tester.tap(find.text('Retry'));
     await tester.pumpAndSettle();
 
     expect(find.text('Paneer Butter Masala'), findsOneWidget);
-    expect(service.listCalls, 2);
+    expect(service.listByUserCalls, 2);
   });
 
   testWidgets('search filters the visible cards', (tester) async {

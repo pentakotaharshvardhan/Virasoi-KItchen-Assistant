@@ -22,7 +22,7 @@ class CreateRecipeViewModel extends ChangeNotifier {
   bool isSubmitting = false;
   String? errorMessage;
   List<RecipeModel> generated = [];
-  
+
   List<String> selectedDishes = [];
   String suggestedDishName = '';
   int stoves = 1;
@@ -57,7 +57,7 @@ class CreateRecipeViewModel extends ChangeNotifier {
       notifyListeners();
       return;
     }
-    
+
     _suggestTimer = Timer(const Duration(milliseconds: 600), () async {
       final res = await _ai.suggestDishName(value);
       if (res is Success<String>) {
@@ -67,14 +67,15 @@ class CreateRecipeViewModel extends ChangeNotifier {
     });
   }
 
-  Future<bool> submit({required int stoveCount, required int servingCount}) async {
+  Future<bool> submit(
+      {required int stoveCount, required int servingCount}) async {
     if (isSubmitting) return false;
     if (selectedDishes.isEmpty) {
       errorMessage = 'Please add at least one dish.';
       notifyListeners();
       return false;
     }
-    
+
     isSubmitting = true;
     errorMessage = null;
     notifyListeners();
@@ -85,8 +86,10 @@ class CreateRecipeViewModel extends ChangeNotifier {
     await _storage.saveSettings(stoves: stoves, servings: servings);
 
     generated = [];
+    final userId = await _storage.userId;
     for (final dishName in selectedDishes) {
-      final result = await _service.generateRecipe(dishName: dishName);
+      final result =
+          await _service.generateRecipe(dishName: dishName, userId: userId);
       switch (result) {
         case Success(data: final recipe):
           generated.add(recipe);

@@ -130,7 +130,9 @@ void main() {
     expect(service.generateCalls, 0);
   });
 
-  test('submit generates every dish separately and stores the settings', () async {
+  test('submit generates every dish separately and stores the settings',
+      () async {
+    await storage.saveSession(accessToken: 'jwt', userId: 'user-42');
     final vm = buildViewModel();
     vm.addDish('Paneer');
     vm.addDish('Naan');
@@ -143,12 +145,14 @@ void main() {
     expect(ok, isTrue);
     expect(vm.isSubmitting, isFalse);
     expect(service.generatedDishNames, ['Paneer', 'Naan']);
+    expect(service.lastGenerateUserId, 'user-42');
     expect(vm.generated, hasLength(2));
     expect(await storage.stoveCount, 2);
     expect(await storage.servingCount, 4);
   });
 
-  test('submit failure restores the submitting flag and records the error', () async {
+  test('submit failure restores the submitting flag and records the error',
+      () async {
     service.generateResult = const Failure('AI quota exhausted');
     final vm = buildViewModel();
     vm.addDish('Paneer');
@@ -161,7 +165,8 @@ void main() {
     expect(vm.generated, isEmpty);
   });
 
-  test('submit failure identifies the dish that could not be generated', () async {
+  test('submit failure identifies the dish that could not be generated',
+      () async {
     service.generateResult = const Failure('AI quota exhausted');
     final vm = buildViewModel();
     vm.addDish('Paneer');
