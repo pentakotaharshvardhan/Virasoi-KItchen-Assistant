@@ -10,14 +10,16 @@ import '../../widgets/gradient_button.dart';
 import '../../widgets/recipe_card_shimmer.dart';
 
 class IngredientPage extends StatefulWidget {
-  final String recipeId;
-  const IngredientPage({super.key, required this.recipeId});
+  /// Every recipe of the meal - their ingredients are merged into one shopping list.
+  final List<String> recipeIds;
+  const IngredientPage({super.key, required this.recipeIds});
 
   @override
   State<IngredientPage> createState() => _IngredientPageState();
 }
 
-class _IngredientPageState extends State<IngredientPage> {
+class _IngredientPageState extends State<IngredientPage>
+    with WidgetsBindingObserver {
   late final IngredientViewModel _vm;
   late final VoiceViewModel _voiceVm;
 
@@ -27,27 +29,41 @@ class _IngredientPageState extends State<IngredientPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _vm = context.read<IngredientViewModel>();
     _voiceVm = context.read<VoiceViewModel>();
     _vm.addListener(_onStateChanged);
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      await _vm.load(widget.recipeId);
+      await _vm.load(widget.recipeIds);
       // Automatically start voice assistant in background for gathering
       if (_vm.sessionId != null) {
         // "What's left on the list?" -> read out whatever is still pending.
         _voiceVm.onRemainingItemsRequest = () async => _vm.remainingNames;
         _voiceVm.onIngredientsRemoved = _vm.markConfirmedByNames;
+        _voiceVm.onAvailableIngredients = () async => _vm.remainingNames;
         await _voiceVm.init(_vm.sessionId);
       }
     });
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive) {
+      _voiceVm.pauseSessionHeartbeat();
+    } else if (state == AppLifecycleState.resumed) {
+      _voiceVm.resumeSessionHeartbeat();
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _vm.removeListener(_onStateChanged);
     _voiceVm.onRemainingItemsRequest = null;
     _voiceVm.onIngredientsRemoved = null;
+    _voiceVm.onAvailableIngredients = null;
     // The cooking screen owns the mic after a hand-off; otherwise release it on the way out.
     if (!_handingOff) {
       _voiceVm.detach();
@@ -84,7 +100,9 @@ class _IngredientPageState extends State<IngredientPage> {
         arguments: {
           'sessionId': _vm.sessionId,
           'awaitingReady': true,
-          'recipeId': widget.recipeId,
+          // The steps panel follows the first dish of the meal.
+          'recipeId':
+              widget.recipeIds.isNotEmpty ? widget.recipeIds.first : null,
         },
       );
     });
@@ -277,7 +295,11 @@ class _IngredientPageState extends State<IngredientPage> {
         final item = vm.pending[i];
         return AnimatedSwitcher(
           duration: const Duration(milliseconds: 300),
-          child: IngredientFlipCard(key: ValueKey(item.id), ingredient: item),
+          child: IngredientFlipCard(
+            key: ValueKey(item.id),
+            ingredient: item,
+            showDishNames: vm.dishCount > 1,
+          ),
         );
       },
     );

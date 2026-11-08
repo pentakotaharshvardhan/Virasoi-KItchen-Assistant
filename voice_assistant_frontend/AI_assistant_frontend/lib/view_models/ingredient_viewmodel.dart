@@ -5,6 +5,7 @@ import '../core/network/websocket_service.dart';
 import '../core/utils/result.dart';
 import '../core/utils/secure_storage.dart';
 import '../models/ingredient_model.dart';
+import '../models/recipe_model.dart';
 import '../services/ingredient_service.dart';
 import '../services/unsplash_service.dart';
 
@@ -42,11 +43,18 @@ class IngredientViewModel extends ChangeNotifier {
   List<String> missingItems = [];
   String? sessionId;
 
-  String? _dishName;
+  /// Dishes of the current meal - every one is added to the cooking session.
+  List<String> _dishNames = [];
   int _serves = 1;
   int _stoveCount = 1;
 
-  Future<void> load(String recipeId) async {
+  int get dishCount => _dishNames.length;
+  List<String> get dishNames => List.unmodifiable(_dishNames);
+
+  /// Loads every recipe of the meal and MERGES their ingredients into one shopping
+  /// list: an item needed by several dishes appears once, with the combined quantity
+  /// and a note of which dishes need it (and therefore only one photo).
+  Future<void> load(List<String> recipeIds) async {
     isLoading = true;
     errorMessage = null;
     notifyListeners();
@@ -55,21 +63,16 @@ class IngredientViewModel extends ChangeNotifier {
     _stoveCount = await _storage.stoveCount;
     _serves = await _storage.servingCount;
 
-    // 1. Load recipe and ingredients
-    final result = await _ingredientService.getRecipeWithIngredients(recipeId);
-    
+    // 1. Load every recipe and merge their ingredient lists.
+    final result =
+        await _ingredientService.getRecipesWithIngredients(recipeIds);
+
     switch (result) {
-      case Success(data: final recipe):
-        pending = recipe.ingredients;
-        _dishName = recipe.dishName;
-        // Fetch Unsplash photos in background
-        for (final item in pending) {
-          _unsplash.fetchImageUrl(item.name).then((url) {
-            if (url == null) return;
-            item.imageUrl = url;
-            notifyListeners();
-          });
-        }
+      case Success(data: final recipes):
+        _dishNames = recipes.map((r) => r.dishName).toList();
+        pending = _mergeIngredients(recipes);
+        confirmed = [];
+        _fetchPhotos();
         break;
       case Failure(message: final m):
         errorMessage = m;
@@ -105,28 +108,93 @@ class IngredientViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Adds the dish to the already-created session, which kicks off scheduling. Called when the
-  /// user has confirmed every ingredient and is transitioning to the cooking screen.
+  /// Adds every dish of the meal to the already-created session, which kicks off scheduling.
+  /// Called when the user has confirmed every ingredient and is transitioning to the cooking screen.
   Future<bool> startCooking() async {
-    if (sessionId == null || _dishName == null) return false;
+    if (sessionId == null || _dishNames.isEmpty) return false;
     isLoading = true;
     errorMessage = null;
     notifyListeners();
 
-    final res = await _api.post(ApiConstants.sessionDishes(sessionId!), body: {
-      'dishName': _dishName,
-      'servesRequested': _serves < 1 ? 1 : _serves,
-    });
+    for (final dishName in _dishNames) {
+      final res =
+          await _api.post(ApiConstants.sessionDishes(sessionId!), body: {
+        'dishName': dishName,
+        'servesRequested': _serves < 1 ? 1 : _serves,
+      });
+
+      switch (res) {
+        case Success():
+          break;
+        case Failure(message: final m):
+          isLoading = false;
+          errorMessage = m;
+          notifyListeners();
+          return false;
+      }
+    }
 
     isLoading = false;
-    switch (res) {
-      case Success():
+    notifyListeners();
+    return true;
+  }
+
+  /// Collapses the meal's ingredient lists into one card per unique item+unit:
+  /// quantities are summed and every dish that needs it is recorded on the card.
+  List<IngredientModel> _mergeIngredients(List<RecipeModel> recipes) {
+    final merged = <String, IngredientModel>{};
+
+    for (final recipe in recipes) {
+      for (final ingredient in recipe.ingredients) {
+        final nameKey = ingredient.name.trim().toLowerCase();
+        if (nameKey.isEmpty) continue;
+        final unitKey = ingredient.unit.trim().toLowerCase();
+        final key = '$nameKey|$unitKey';
+
+        final existing = merged[key];
+        if (existing == null) {
+          var newId = ingredient.id.trim();
+          if (newId.isEmpty || merged.values.any((m) => m.id == newId)) {
+            newId =
+                'item_${merged.length}_${key.replaceAll(RegExp(r'[^a-z0-9]+'), '_')}';
+          }
+          merged[key] = IngredientModel(
+            id: newId,
+            name: ingredient.name.trim(),
+            quantityPerServe: ingredient.quantityPerServe,
+            unit: ingredient.unit,
+            dishNames: [recipe.dishName],
+          );
+        } else {
+          existing.quantityPerServe = double.parse(
+              (existing.quantityPerServe + ingredient.quantityPerServe)
+                  .toStringAsFixed(3));
+          if (!existing.dishNames.contains(recipe.dishName)) {
+            existing.dishNames.add(recipe.dishName);
+          }
+        }
+      }
+    }
+
+    return merged.values.toList();
+  }
+
+  /// One photo per unique ingredient name - merged duplicates share the same image.
+  void _fetchPhotos() {
+    final requested = <String>{};
+    for (final item in pending) {
+      final nameKey = item.name.trim().toLowerCase();
+      if (!requested.add(nameKey)) continue;
+
+      _unsplash.fetchImageUrl(item.name).then((url) {
+        if (url == null) return;
+        for (final other in [...pending, ...confirmed]) {
+          if (other.name.trim().toLowerCase() == nameKey) {
+            other.imageUrl = url;
+          }
+        }
         notifyListeners();
-        return true;
-      case Failure(message: final m):
-        errorMessage = m;
-        notifyListeners();
-        return false;
+      });
     }
   }
 
@@ -144,10 +212,12 @@ class IngredientViewModel extends ChangeNotifier {
       if (type == 'remove_ingredient') {
         markConfirmedByNames(_ingredientNamesFromMessage(msg, data));
       } else if (type == 'item_confirmed') {
-        final name = data?['itemName']?.toString() ?? msg['itemName']?.toString();
+        final name =
+            data?['itemName']?.toString() ?? msg['itemName']?.toString();
         if (name != null) markConfirmedByName(name);
       } else if (type == 'item_missing') {
-        final name = data?['itemName']?.toString() ?? msg['itemName']?.toString();
+        final name =
+            data?['itemName']?.toString() ?? msg['itemName']?.toString();
         if (name != null && !missingItems.contains(name)) {
           missingItems.add(name);
           notifyListeners();
@@ -188,31 +258,24 @@ class IngredientViewModel extends ChangeNotifier {
         .toList();
     if (requestedNames.isEmpty || pending.isEmpty) return;
 
-    final matchedByName = List<int?>.filled(requestedNames.length, null);
     final usedIndices = <int>{};
 
     for (var i = 0; i < requestedNames.length; i++) {
-      final index = pending.indexWhere(
-        (item) =>
-            !usedIndices.contains(pending.indexOf(item)) &&
-            item.name.trim().toLowerCase() == requestedNames[i],
-      );
-      if (index != -1) {
-        matchedByName[i] = index;
-        usedIndices.add(index);
+      final available = <int, int>{};
+      for (var index = 0; index < pending.length; index++) {
+        if (usedIndices.contains(index)) continue;
+        final score = _nameMatchScore(pending[index].name, requestedNames[i]);
+        if (score != null) available[index] = score;
       }
-    }
+      if (available.isEmpty) continue;
 
-    for (var i = 0; i < requestedNames.length; i++) {
-      if (matchedByName[i] != null) continue;
-      final index = pending.indexWhere(
-        (item) =>
-            !usedIndices.contains(pending.indexOf(item)) &&
-            _namesMatch(item.name.trim().toLowerCase(), requestedNames[i]),
-      );
-      if (index != -1) {
-        matchedByName[i] = index;
-        usedIndices.add(index);
+      final bestScore = available.values.reduce((a, b) => a < b ? a : b);
+      final bestIndices = available.entries
+          .where((entry) => entry.value == bestScore)
+          .map((entry) => entry.key)
+          .toList();
+      if (bestIndices.length == 1) {
+        usedIndices.add(bestIndices.single);
       }
     }
 
@@ -231,17 +294,83 @@ class IngredientViewModel extends ChangeNotifier {
     markConfirmedByNames([name]);
   }
 
-  bool _namesMatch(String item, String query) {
+  int? _nameMatchScore(String item, String query) {
     String singular(String s) {
-      if (s.endsWith('ies') && s.length > 3) return '${s.substring(0, s.length - 3)}y';
-      if (s.endsWith('es') && s.length > 2) return s.substring(0, s.length - 2);
-      if (s.endsWith('s') && s.length > 1) return s.substring(0, s.length - 1);
+      if (s.endsWith('ies') && s.length > 3) {
+        return '${s.substring(0, s.length - 3)}y';
+      }
+      if (s.endsWith('oes') && s.length > 4) {
+        return s.substring(0, s.length - 2);
+      }
+      if (s.endsWith('es') &&
+          s.length > 4 &&
+          (s.endsWith('ses') ||
+              s.endsWith('xes') ||
+              s.endsWith('zes') ||
+              s.endsWith('ches') ||
+              s.endsWith('shes'))) {
+        return s.substring(0, s.length - 2);
+      }
+      if (s.endsWith('s') && !s.endsWith('ss') && s.length > 3) {
+        return s.substring(0, s.length - 1);
+      }
       return s;
     }
 
-    final a = singular(item);
-    final b = singular(query);
-    return a == b || a.contains(b) || b.contains(a);
+    List<String> normalize(String value) => value
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9]+'), ' ')
+        .trim()
+        .split(RegExp(r'\s+'))
+        .where((word) => word.isNotEmpty)
+        .map(singular)
+        .toList();
+
+    final itemWords = normalize(item);
+    final queryWords = normalize(query);
+    if (itemWords.isEmpty || queryWords.isEmpty) return null;
+    if (itemWords.join(' ') == queryWords.join(' ')) return 0;
+    if (queryWords.length == 1 && itemWords.contains(queryWords.single)) {
+      return 1;
+    }
+
+    var totalDistance = 0;
+    for (final queryWord in queryWords) {
+      int? bestDistance;
+      for (final itemWord in itemWords) {
+        final distance = _editDistance(queryWord, itemWord);
+        final maxDistance = queryWord.length >= 8 ? 2 : 1;
+        if ((queryWord.length < 4 && queryWord != itemWord) ||
+            distance > maxDistance) {
+          continue;
+        }
+        if (bestDistance == null || distance < bestDistance) {
+          bestDistance = distance;
+        }
+      }
+      if (bestDistance == null) return null;
+      totalDistance += bestDistance;
+    }
+    return 10 + totalDistance;
+  }
+
+  int _editDistance(String left, String right) {
+    var previous = List<int>.generate(right.length + 1, (index) => index);
+    for (var i = 1; i <= left.length; i++) {
+      final current = List<int>.filled(right.length + 1, 0);
+      current[0] = i;
+      for (var j = 1; j <= right.length; j++) {
+        final substitution =
+            previous[j - 1] + (left[i - 1] == right[j - 1] ? 0 : 1);
+        current[j] = [
+          previous[j] + 1,
+          current[j - 1] + 1,
+          substitution,
+        ].reduce((a, b) => a < b ? a : b);
+      }
+      previous = current;
+    }
+    return previous[right.length];
   }
 
   /// Manually remove an ingredient from the pending grid by ID

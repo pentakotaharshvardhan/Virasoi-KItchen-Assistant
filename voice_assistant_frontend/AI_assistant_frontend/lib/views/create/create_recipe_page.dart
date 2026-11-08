@@ -33,13 +33,22 @@ class _CreateRecipePageState extends State<CreateRecipePage> {
       });
     });
     _dishController.addListener(() {
-      context.read<CreateRecipeViewModel>().onDishNameChanged(_dishController.text);
+      context
+          .read<CreateRecipeViewModel>()
+          .onDishNameChanged(_dishController.text);
     });
   }
 
   void _addDish() {
     if (_dishController.text.trim().isNotEmpty) {
-      context.read<CreateRecipeViewModel>().addDish(_dishController.text);
+      final vm = context.read<CreateRecipeViewModel>();
+      if (!vm.addDish(_dishController.text)) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+              content: Text(vm.errorMessage ?? 'Could not add that dish.')),
+        );
+        return;
+      }
       _dishController.clear();
       FocusScope.of(context).unfocus();
     }
@@ -47,9 +56,15 @@ class _CreateRecipePageState extends State<CreateRecipePage> {
 
   Future<void> _start() async {
     final vm = context.read<CreateRecipeViewModel>();
-    
+
     if (_dishController.text.trim().isNotEmpty) {
-      vm.addDish(_dishController.text);
+      if (!vm.addDish(_dishController.text)) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+              content: Text(vm.errorMessage ?? 'Could not add that dish.')),
+        );
+        return;
+      }
       _dishController.clear();
     }
 
@@ -57,16 +72,18 @@ class _CreateRecipePageState extends State<CreateRecipePage> {
       stoveCount: _stoves,
       servingCount: _servings,
     );
-    
+
     if (!mounted) return;
     if (ok && vm.generated.isNotEmpty) {
-      if (vm.generated.length == 1) {
-        Navigator.pushNamed(context, AppRoutes.ingredients, arguments: vm.generated.first.id);
-      } else {
-        Navigator.pushNamed(context, AppRoutes.recipeList);
-      }
+      // Every dish is generated individually; the items screen merges their ingredients.
+      Navigator.pushNamed(
+        context,
+        AppRoutes.ingredients,
+        arguments: vm.generated.map((r) => r.id).toList(),
+      );
     } else if (vm.errorMessage != null) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(vm.errorMessage!)));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(vm.errorMessage!)));
     }
   }
 
@@ -89,68 +106,90 @@ class _CreateRecipePageState extends State<CreateRecipePage> {
                     TweenAnimationBuilder<double>(
                       tween: Tween(begin: 0, end: 1),
                       duration: const Duration(milliseconds: 450),
-                      builder: (context, v, child) => Opacity(opacity: v, child: child),
+                      builder: (context, v, child) =>
+                          Opacity(opacity: v, child: child),
                       child: const Text(
                         'What are we cooking today?',
-                        style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, letterSpacing: -0.5),
+                        style: TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: -0.5),
                       ),
                     ),
                     const SizedBox(height: 6),
-                    const Text('Add dishes one by one to your session.', style: TextStyle(color: AppColors.textSecondary)),
+                    const Text('Add dishes one by one to your session.',
+                        style: TextStyle(color: AppColors.textSecondary)),
                     const SizedBox(height: 24),
-                    
                     AppTextField(
-                      controller: _dishController, 
-                      label: 'Enter dish name', 
+                      controller: _dishController,
+                      label: 'Enter dish name',
                       icon: Icons.restaurant_menu_rounded,
                       suffix: IconButton(
-                        icon: const Icon(Icons.add_task_rounded, color: AppColors.primary),
+                        icon: const Icon(Icons.add_task_rounded,
+                            color: AppColors.primary),
                         onPressed: _addDish,
                       ),
                       onFieldSubmitted: (_) => _addDish(),
                     ),
-                    
-                    if (vm.suggestedDishName.isNotEmpty && vm.suggestedDishName != _dishController.text)
+                    if (vm.suggestedDishName.isNotEmpty &&
+                        vm.suggestedDishName != _dishController.text)
                       Padding(
                         padding: const EdgeInsets.only(top: 8, left: 4),
                         child: InkWell(
                           onTap: () {
                             _dishController.text = vm.suggestedDishName;
-                            _dishController.selection = TextSelection.fromPosition(TextPosition(offset: _dishController.text.length));
+                            _dishController.selection =
+                                TextSelection.fromPosition(TextPosition(
+                                    offset: _dishController.text.length));
                           },
                           child: Text(
                             'Did you mean: ${vm.suggestedDishName}?',
-                            style: const TextStyle(color: AppColors.primary, fontSize: 13, fontWeight: FontWeight.w600),
+                            style: const TextStyle(
+                                color: AppColors.primary,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600),
                           ),
                         ),
                       ),
-                    
                     if (vm.selectedDishes.isNotEmpty)
                       Padding(
                         padding: const EdgeInsets.only(top: 16),
                         child: Wrap(
                           spacing: 8,
                           runSpacing: 8,
-                          children: vm.selectedDishes.map((dish) => Chip(
-                            label: Text(dish, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
-                            backgroundColor: AppColors.surfaceElevated,
-                            deleteIcon: const Icon(Icons.cancel_rounded, size: 18, color: AppColors.textSecondary),
-                            onDeleted: () => vm.removeDish(dish),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                            side: BorderSide(color: AppColors.divider.withOpacity(0.5)),
-                          )).toList(),
+                          children: vm.selectedDishes
+                              .map((dish) => Chip(
+                                    label: Text(dish,
+                                        style: const TextStyle(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w700)),
+                                    backgroundColor: AppColors.surfaceElevated,
+                                    deleteIcon: const Icon(Icons.cancel_rounded,
+                                        size: 18,
+                                        color: AppColors.textSecondary),
+                                    onDeleted: () => vm.removeDish(dish),
+                                    shape: RoundedRectangleBorder(
+                                        borderRadius:
+                                            BorderRadius.circular(10)),
+                                    side: BorderSide(
+                                        color:
+                                            AppColors.divider.withOpacity(0.5)),
+                                  ))
+                              .toList(),
                         ),
                       ),
-
                     const SizedBox(height: 32),
-                    const Text('Kitchen Settings', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                    const Text('Kitchen Settings',
+                        style: TextStyle(
+                            fontSize: 16, fontWeight: FontWeight.w700)),
                     const SizedBox(height: 16),
-                    
                     _StepperRow(
-                      label: 'Stoves available',
+                      label:
+                          'Stoves available (max ${CreateRecipeViewModel.maxStoves})',
                       icon: Icons.local_fire_department_rounded,
                       value: _stoves,
                       onChanged: (v) => setState(() => _stoves = v),
+                      maxValue: CreateRecipeViewModel.maxStoves,
                     ),
                     const SizedBox(height: 12),
                     _StepperRow(
@@ -159,13 +198,13 @@ class _CreateRecipePageState extends State<CreateRecipePage> {
                       value: _servings,
                       onChanged: (v) => setState(() => _servings = v),
                     ),
-                    
                     const SizedBox(height: 40),
-                    
                     GradientButton(
-                      label: vm.selectedDishes.length > 1 ? 'Generate Recipes' : 'Generate Recipe',
-                      icon: Icons.auto_awesome, 
-                      isLoading: vm.isSubmitting, 
+                      label: vm.selectedDishes.length > 1
+                          ? 'Generate Recipes'
+                          : 'Generate Recipe',
+                      icon: Icons.auto_awesome,
+                      isLoading: vm.isSubmitting,
                       onPressed: _start,
                     ),
                   ],
@@ -184,8 +223,15 @@ class _StepperRow extends StatelessWidget {
   final IconData icon;
   final int value;
   final ValueChanged<int> onChanged;
+  final int? maxValue;
 
-  const _StepperRow({required this.label, required this.icon, required this.value, required this.onChanged});
+  const _StepperRow({
+    required this.label,
+    required this.icon,
+    required this.value,
+    required this.onChanged,
+    this.maxValue,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -200,15 +246,22 @@ class _StepperRow extends StatelessWidget {
         children: [
           Icon(icon, color: AppColors.primary, size: 20),
           const SizedBox(width: 14),
-          Expanded(child: Text(label, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500))),
+          Expanded(
+              child: Text(label,
+                  style: const TextStyle(
+                      fontSize: 14, fontWeight: FontWeight.w500))),
           IconButton(
             icon: const Icon(Icons.remove_circle_outline_rounded, size: 24),
             onPressed: value > 1 ? () => onChanged(value - 1) : null,
           ),
-          Text('$value', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
+          Text('$value',
+              style:
+                  const TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
           IconButton(
             icon: const Icon(Icons.add_circle_outline_rounded, size: 24),
-            onPressed: () => onChanged(value + 1),
+            onPressed: maxValue == null || value < maxValue!
+                ? () => onChanged(value + 1)
+                : null,
           ),
         ],
       ),

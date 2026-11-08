@@ -10,6 +10,7 @@ import com.example.voice_assistant.service.RecipeService;
 import com.example.voice_assistant.service.SchedulerService;
 import com.example.voice_assistant.service.SpeechToTextService;
 import com.example.voice_assistant.service.TextToSpeechService;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.web.socket.*;
@@ -113,7 +114,32 @@ public class AudioStreamWebSocketHandler extends TextWebSocketHandler {
         // {"type":"user_text","text":...}. Classify + route it exactly like a spoken utterance.
         if (action.isEmpty() && "user_text".equals(type)) {
             String text = node.path("text").asText(node.path("transcript").asText(""));
-            handleUserText(session, text);
+            handleUserText(session, text, readIngredientCandidates(node.path("availableIngredientNames")));
+            return;
+        }
+
+        // Flutter classifies through POST /api/ai/command and forwards the typed result here,
+        // avoiding a duplicate Gemini request before applying a scheduler action.
+        if (action.isEmpty() && "command_result".equals(type)) {
+            if (!node.path("result").isObject()) {
+                send(session, "error", Map.of("message", "The command result must be a JSON object."));
+                return;
+            }
+            VoiceCommandResultDto parsed;
+            try {
+                parsed = objectMapper.treeToValue(node.path("result"), VoiceCommandResultDto.class);
+            } catch (JsonProcessingException e) {
+                send(session, "error", Map.of("message", "The command result contains invalid parameters."));
+                return;
+            }
+            handleClassifiedUserText(session, node.path("text").asText(""), parsed);
+            return;
+        }
+
+        if (action.isEmpty() && "heartbeat".equals(type)) {
+            UUID sessionId = extractSessionId(session);
+            if (sessionId != null) schedulerService.heartbeat(sessionId);
+            send(session, "heartbeat_ack", Map.of());
             return;
         }
 
@@ -137,7 +163,11 @@ public class AudioStreamWebSocketHandler extends TextWebSocketHandler {
                 pendingMeta.put(session.getId(), meta == null ? Map.of() : meta);
             }
             case "end_utterance" -> handleUtterance(session);
-            case "ping" -> send(session, "pong", Map.of());
+            case "ping" -> {
+                UUID sessionId = extractSessionId(session);
+                if (sessionId != null) schedulerService.heartbeat(sessionId);
+                send(session, "pong", Map.of());
+            }
             default -> send(session, "error", Map.of("message", "Unknown action: " + action));
         }
     }
@@ -173,11 +203,12 @@ public class AudioStreamWebSocketHandler extends TextWebSocketHandler {
                 case "ancestor_transcript" -> {
                     String dishNameHint = (String) meta.getOrDefault("dishNameHint", "");
                     String createdBy = (String) meta.getOrDefault("createdBy", "");
-                    Recipe saved = recipeService.uploadAncestorRecipe(transcript, dishNameHint, createdBy);
+                    Recipe saved = recipeService.uploadAncestorRecipe(
+                            transcript, dishNameHint, createdBy, currentUserId(session));
                     send(session, "recipe_saved", saved);
                 }
                 case "dish_name" -> {
-                    Recipe recipe = recipeService.findOrGenerate(transcript);
+                    Recipe recipe = recipeService.findOrGenerate(transcript, currentUserId(session));
                     pendingDishName.put(session.getId(), recipe.getDishName());
                     send(session, "recipe_found", recipe);
                     sendPrompt(session, "num_serves", "Got it, " + recipe.getDishName() + ". How many people are you serving?");
@@ -216,13 +247,19 @@ public class AudioStreamWebSocketHandler extends TextWebSocketHandler {
      * Handles free-text commands (already transcribed on the device). Shared by the typed
      * {"type":"user_text"} protocol and the legacy {"action":"step_command"} audio protocol.
      */
-    private void handleUserText(WebSocketSession session, String transcript) throws Exception {
+    private void handleUserText(
+            WebSocketSession session, String transcript, List<String> ingredientCandidates) throws Exception {
         if (transcript == null || transcript.isBlank()) {
             sendPrompt(session, "step_command", "I didn't catch that. Could you say it again?");
             return;
         }
 
-        VoiceCommandResultDto parsed = voiceCommandService.classify(transcript);
+        VoiceCommandResultDto parsed = voiceCommandService.classify(transcript, ingredientCandidates);
+        handleClassifiedUserText(session, transcript, parsed);
+    }
+
+    private void handleClassifiedUserText(
+            WebSocketSession session, String transcript, VoiceCommandResultDto parsed) throws Exception {
         VoiceCommandService.Command command;
         try {
             command = VoiceCommandService.Command.valueOf(parsed.command);
@@ -253,7 +290,7 @@ public class AudioStreamWebSocketHandler extends TextWebSocketHandler {
 
         if (command == VoiceCommandService.Command.UNKNOWN) {
             sendPrompt(session, "step_command",
-                    "I'm sorry, I didn't understand that. You can say next, wait, repeat, stop, or remove an ingredient.");
+                    "I'm sorry, I didn't understand that. You can say next, wait, repeat, stop, or \"I am free\".");
             return;
         }
 
@@ -328,6 +365,23 @@ public class AudioStreamWebSocketHandler extends TextWebSocketHandler {
             handleRemainingItems(session);
             return;
         }
+        if (command == VoiceCommandService.Command.FREE_USER) {
+            SessionSnapshotDto snapshot = schedulerService.releaseUser(sessionId);
+            lastSpokenMessage.put(session.getId(), snapshot.message);
+            send(session, "session_snapshot", snapshot);
+            return;
+        }
+        if (command == VoiceCommandService.Command.NEXT
+                && ((parsed.stoveIndices != null && !parsed.stoveIndices.isEmpty())
+                || parsed.stoveIndex != null)) {
+            List<Integer> stoveIndices = parsed.stoveIndices != null && !parsed.stoveIndices.isEmpty()
+                    ? parsed.stoveIndices
+                    : List.of(parsed.stoveIndex);
+            SessionSnapshotDto snapshot = schedulerService.completeStoveSteps(sessionId, stoveIndices);
+            lastSpokenMessage.put(session.getId(), snapshot.message);
+            send(session, "session_snapshot", snapshot);
+            return;
+        }
 
         // Resolve which step this applies to: an explicit stove number or dish name (needed when
         // more than one might be waiting on the user at once) takes priority over the scheduler's
@@ -388,6 +442,18 @@ public class AudioStreamWebSocketHandler extends TextWebSocketHandler {
         return false;
     }
 
+    private List<String> readIngredientCandidates(JsonNode node) {
+        if (!node.isArray()) return List.of();
+        List<String> candidates = new ArrayList<>();
+        node.forEach(value -> {
+            if (candidates.size() < 100 && value.isTextual()
+                    && !value.asText().isBlank() && value.asText().length() <= 120) {
+                candidates.add(value.asText().trim());
+            }
+        });
+        return candidates;
+    }
+
     private int extractFirstNumber(String text, int fallback) {
         if (text == null) return fallback;
         Matcher m = DIGITS.matcher(text);
@@ -398,6 +464,12 @@ public class AudioStreamWebSocketHandler extends TextWebSocketHandler {
             }
         }
         return fallback;
+    }
+
+    /** App user id stashed by JwtHandshakeInterceptor on the WebSocket handshake. */
+    private String currentUserId(WebSocketSession session) {
+        Object userId = session.getAttributes().get("userId");
+        return userId == null ? null : userId.toString();
     }
 
     private UUID extractSessionId(WebSocketSession session) {

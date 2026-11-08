@@ -8,13 +8,17 @@ import com.example.voice_assistant.entity.enums.StepStatus;
 import com.example.voice_assistant.entity.enums.StepType;
 import com.example.voice_assistant.exception.ResourceNotFoundException;
 import com.example.voice_assistant.repository.CookingSessionRepository;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -25,7 +29,8 @@ import java.util.UUID;
  *   - 1 user resource (there's only one cook)
  *
  * Every dish is a "process" walking through an ordered list of "instructions" (SessionDishStep).
- * Each instruction declares what resource it needs (StepType: STOVE / USER_ACTION / PASSIVE).
+ * Each instruction declares what resource it needs (StepType: STOVE / USER_ACTION /
+ * STOVE_AND_USER / PASSIVE).
  * tick() is the scheduler's dispatch loop: for every active dish, if its current step's required
  * resource is free, the step is dispatched (assigned) - first-come-first-served across dishes,
  * ordered by the order they were added to the session (priorityOrder), mirroring FCFS scheduling.
@@ -41,22 +46,29 @@ public class SchedulerService {
     private final TimerService timerService;
     private final NotificationService notificationService;
     private final CookingSessionService cookingSessionService;
+    private final ObjectProvider<SchedulerService> self;
+
+    private static final Duration USER_REMINDER_INTERVAL = Duration.ofMinutes(6);
 
 
     public SchedulerService(CookingSessionRepository sessionRepository, TimerService timerService,
-                             NotificationService notificationService, CookingSessionService cookingSessionService) {
+                             NotificationService notificationService, CookingSessionService cookingSessionService,
+                             ObjectProvider<SchedulerService> self) {
         this.sessionRepository = sessionRepository;
         this.timerService = timerService;
         this.notificationService = notificationService;
         this.cookingSessionService = cookingSessionService;
+        this.self = self;
     }
 
     /** Re-evaluates the whole session, dispatching any steps whose required resource just became free. */
     @Transactional
     public SessionSnapshotDto tick(UUID sessionId) {
-        CookingSession session = loadSession(sessionId);
+        CookingSession session = loadSessionForUpdate(sessionId);
         if (session.getStatus() != SessionStatus.ACTIVE) {
-            return buildSnapshot(session, "This session has already finished.");
+            return buildSnapshot(session, session.getStatus() == SessionStatus.CANCELLED
+                    ? "This cooking session was cancelled."
+                    : "This session has already finished.");
         }
 
         // Loop so that auto-completing PASSIVE (no-timer) steps immediately free up the next
@@ -69,6 +81,9 @@ public class SchedulerService {
 
         sessionRepository.save(session);
         cookingSessionService.markSessionCompletedIfAllDishesDone(session);
+        if (session.getStatus() == SessionStatus.COMPLETED) {
+            timerService.cancelTimersForSession(sessionId);
+        }
 
         SessionSnapshotDto snapshot = buildSnapshot(session, computeMessage(session));
         notificationService.pushSnapshot(sessionId, snapshot);
@@ -79,7 +94,42 @@ public class SchedulerService {
      *  (re)connects mid-cook and needs the active instruction spoken back to it. */
     public SessionSnapshotDto status(UUID sessionId) {
         CookingSession session = loadSession(sessionId);
-        return buildSnapshot(session, computeMessage(session));
+        String message = session.getStatus() == SessionStatus.ACTIVE
+                ? computeMessage(session)
+                : session.getStatus() == SessionStatus.CANCELLED
+                        ? "This cooking session was cancelled."
+                        : "This session has already finished.";
+        return buildSnapshot(session, message);
+    }
+
+    @Transactional
+    public void heartbeat(UUID sessionId) {
+        CookingSession session = loadSessionForUpdate(sessionId);
+        if (session.getStatus() == SessionStatus.ACTIVE) {
+            session.setLastHeartbeatAt(Instant.now());
+            sessionRepository.save(session);
+        }
+    }
+
+    @Transactional
+    public SessionSnapshotDto cancelSession(UUID sessionId) {
+        CookingSession session = loadSessionForUpdate(sessionId);
+        if (session.getStatus() == SessionStatus.ACTIVE) {
+            cancelSessionLocked(session);
+        }
+        return buildSnapshot(session, session.getStatus() == SessionStatus.CANCELLED
+                ? "Cooking session cancelled. Its timers and resource reservations have been cleared."
+                : "This session has already finished.");
+    }
+
+    /** Cancels an abandoned session only after rechecking its heartbeat under the session lock. */
+    @Transactional
+    public void cancelIfHeartbeatExpired(UUID sessionId, Instant cutoff) {
+        CookingSession session = loadSessionForUpdate(sessionId);
+        if (session.getStatus() == SessionStatus.ACTIVE
+                && (session.getLastHeartbeatAt() == null || session.getLastHeartbeatAt().isBefore(cutoff))) {
+            cancelSessionLocked(session);
+        }
     }
 
     /** Resolves which step is currently occupying a given stove, if any. Lets the user say
@@ -111,7 +161,6 @@ public class SchedulerService {
 
     /** One dispatch pass across all active dishes. Returns true if anything changed (so tick() can loop). */
     private boolean dispatchOnce(CookingSession session) {
-        boolean userBusy = isUserBusy(session);
         boolean changedAnything = false;
 
         List<SessionDish> orderedDishes = session.getDishes().stream()
@@ -135,36 +184,40 @@ public class SchedulerService {
                 dish.setStatus(DishStatus.IN_PROGRESS);
             }
 
-            switch (step.getStepType()) {
-                case PASSIVE -> {
-                    beginStep(session, step, null);
-                    changedAnything = true;
-                    if (!step.isRequiresTimer()) {
-                        // Nothing to actively wait for - complete immediately and let the loop advance the dish.
-                        completeStepInternal(session, dish, step);
-                    }
+            if (step.getStepType() == StepType.PASSIVE) {
+                beginStep(session, step, null);
+                changedAnything = true;
+                if (!step.isRequiresTimer()) {
+                    completeStepInternal(session, dish, step);
                 }
-                case STOVE -> {
-                    Optional<StoveResource> freeStove = session.getStoves().stream()
-                            .filter(s -> !s.isBusy())
-                            .min(Comparator.comparingInt(StoveResource::getStoveIndex));
-                    if (freeStove.isPresent()) {
-                        StoveResource stove = freeStove.get();
-                        stove.setBusy(true);
-                        stove.setOccupiedByStepId(step.getId());
-                        beginStep(session, step, stove.getStoveIndex());
-                        changedAnything = true;
-                    }
-                    // else: all stoves busy - dish waits its turn, exactly as described ("stove busy -> user waits").
+                continue;
+            }
+
+            boolean needsStove = step.getStepType().requiresStove();
+            boolean needsUser = step.getStepType().requiresUser();
+            Optional<StoveResource> freeStove = needsStove
+                    ? session.getStoves().stream()
+                            .filter(stove -> !stove.isBusy())
+                            .min(Comparator.comparingInt(StoveResource::getStoveIndex))
+                    : Optional.empty();
+            boolean stoveAvailable = !needsStove || freeStove.isPresent();
+            boolean userAvailable = !needsUser || session.getUserOccupiedByStepId() == null;
+
+            // Acquire both resources only after confirming both are available; never leave a
+            // combined step holding just one resource while it waits for the other.
+            if (stoveAvailable && userAvailable) {
+                Integer stoveIndex = null;
+                if (needsStove) {
+                    StoveResource stove = freeStove.orElseThrow();
+                    stove.setBusy(true);
+                    stove.setOccupiedByStepId(step.getId());
+                    stoveIndex = stove.getStoveIndex();
                 }
-                case USER_ACTION -> {
-                    if (!userBusy) {
-                        beginStep(session, step, null);
-                        userBusy = true; // only one task goes to the user per tick
-                        changedAnything = true;
-                    }
-                    // else: user is occupied with another dish's task - this one waits.
+                if (needsUser) {
+                    session.setUserOccupiedByStepId(step.getId());
                 }
+                beginStep(session, step, stoveIndex);
+                changedAnything = true;
             }
         }
         return changedAnything;
@@ -176,15 +229,21 @@ public class SchedulerService {
             step.setStatus(StepStatus.TIMER_RUNNING);
             step.setTimerStartAt(Instant.now());
             step.setTimerEndAt(Instant.now().plusSeconds(step.getTimerSeconds()));
-            timerService.startTimer(step.getId(), step.getTimerSeconds(), () -> handleTimerElapsed(session.getId(), step.getId()));
+            timerService.startTimer(session.getId(), step.getId(), step.getTimerSeconds(),
+                    () -> self.getObject().handleTimerElapsed(session.getId(), step.getId()));
         } else {
             step.setStatus(StepStatus.IN_PROGRESS);
+        }
+        if (step.getStepType().requiresUser()) {
+            timerService.startUserReminder(session.getId(), step.getId(), USER_REMINDER_INTERVAL,
+                    () -> self.getObject().handleUserReminder(session.getId(), step.getId()));
         }
     }
 
     /** Called from a background scheduler thread when a step's timer finishes. Asks the user: next step, or wait? */
     public void handleTimerElapsed(UUID sessionId, UUID stepId) {
-        CookingSession session = loadSession(sessionId);
+        CookingSession session = loadSessionForUpdate(sessionId);
+        if (session.getStatus() != SessionStatus.ACTIVE) return;
         findStep(session, stepId).ifPresent(step -> {
             if (step.getStatus() == StepStatus.TIMER_RUNNING) {
                 step.setStatus(StepStatus.TIMER_COMPLETED_AWAITING_USER);
@@ -196,6 +255,24 @@ public class SchedulerService {
         });
     }
 
+    /** Repeats the exact active hands-on task; it never changes resource ownership. */
+    @Transactional
+    public void handleUserReminder(UUID sessionId, UUID stepId) {
+        CookingSession session = loadSessionForUpdate(sessionId);
+        if (session.getStatus() != SessionStatus.ACTIVE
+                || !stepId.equals(session.getUserOccupiedByStepId())) return;
+        findStep(session, stepId)
+                .filter(step -> step.getStatus() != StepStatus.COMPLETED
+                        && step.getStatus() != StepStatus.CANCELLED)
+                .ifPresent(step -> {
+                    SessionDish dish = findDishOwning(session, step);
+                    SessionSnapshotDto snapshot = buildSnapshot(session, "Are you still working on step "
+                            + step.getStepNumber() + " for " + dish.getDishName() + ": \""
+                            + step.getInstruction() + "\"? Say \"I am free\" when your hands are free.");
+                    notificationService.pushSnapshot(sessionId, snapshot);
+                });
+    }
+
     /**
      * User (via voice: "done" / "next") confirms a step is finished. Works for:
      *  - a USER_ACTION or STOVE step with no timer that the user manually finished, or
@@ -203,7 +280,10 @@ public class SchedulerService {
      */
     @Transactional
     public SessionSnapshotDto completeStep(UUID sessionId, UUID stepId) {
-        CookingSession session = loadSession(sessionId);
+        CookingSession session = loadSessionForUpdate(sessionId);
+        if (session.getStatus() != SessionStatus.ACTIVE) {
+            return buildSnapshot(session, "This cooking session is no longer active.");
+        }
         SessionDishStep step = findStep(session, stepId)
                 .orElseThrow(() -> new ResourceNotFoundException("Step not found: " + stepId));
 
@@ -219,6 +299,84 @@ public class SchedulerService {
     }
 
     /**
+     * Frees the named occupied stoves once each. Invalid or idle stoves are ignored without
+     * affecting any other resource; a combined step keeps running if its user portion is held.
+     */
+    @Transactional
+    public SessionSnapshotDto completeStoveSteps(UUID sessionId, List<Integer> stoveIndices) {
+        CookingSession session = loadSessionForUpdate(sessionId);
+        if (session.getStatus() != SessionStatus.ACTIVE) {
+            return buildSnapshot(session, "This cooking session is no longer active.");
+        }
+
+        Set<Integer> uniqueIndices = stoveIndices == null
+                ? Set.of()
+                : new LinkedHashSet<>(stoveIndices.stream().filter(index -> index != null).toList());
+        int released = 0;
+        for (Integer index : uniqueIndices) {
+            Optional<StoveResource> target = session.getStoves().stream()
+                    .filter(stove -> stove.getStoveIndex() == index)
+                    .findFirst();
+            if (target.isEmpty()) continue;
+
+            StoveResource stove = target.get();
+            UUID stepId = stove.getOccupiedByStepId();
+            if (!stove.isBusy() || stepId == null) continue;
+
+            SessionDishStep step = findStep(session, stepId).orElse(null);
+            if (step == null || !step.getStepType().requiresStove()
+                    || !isActiveStatus(step.getStatus())) continue;
+
+            stove.setBusy(false);
+            stove.setOccupiedByStepId(null);
+            released++;
+
+            if (!step.getStepType().requiresUser()
+                    || !stepId.equals(session.getUserOccupiedByStepId())) {
+                completeStepInternal(session, findDishOwning(session, step), step);
+            }
+        }
+
+        if (released == 0) {
+            return buildSnapshot(session,
+                    "I couldn't find an active cooking task on the stove number you named.");
+        }
+        sessionRepository.save(session);
+        return tick(sessionId);
+    }
+
+    /** Releases only the user resource. Stove ownership is independent and remains untouched. */
+    @Transactional
+    public SessionSnapshotDto releaseUser(UUID sessionId) {
+        CookingSession session = loadSessionForUpdate(sessionId);
+        if (session.getStatus() != SessionStatus.ACTIVE) {
+            return buildSnapshot(session, "This cooking session is no longer active.");
+        }
+
+        UUID stepId = session.getUserOccupiedByStepId();
+        if (stepId == null) {
+            return tick(sessionId);
+        }
+
+        SessionDishStep step = findStep(session, stepId).orElse(null);
+        session.setUserOccupiedByStepId(null);
+        timerService.cancelUserReminder(sessionId, stepId);
+        if (step == null || !isActiveStatus(step.getStatus())) {
+            sessionRepository.save(session);
+            return tick(sessionId);
+        }
+
+        boolean stoveStillHeld = step.getStepType().requiresStove()
+                && session.getStoves().stream().anyMatch(stove ->
+                        stepId.equals(stove.getOccupiedByStepId()) && stove.isBusy());
+        if (!stoveStillHeld) {
+            completeStepInternal(session, findDishOwning(session, step), step);
+        }
+        sessionRepository.save(session);
+        return tick(sessionId);
+    }
+
+    /**
      * Lets the user opt into a timer on a step that's already IN_PROGRESS but wasn't pre-assigned one by the
      * recipe (e.g. "should I keep a timer for chopping?" -> "yes, 3 minutes"). Reuses the same
      * TIMER_COMPLETED_AWAITING_USER -> next/wait flow as recipe-driven timers.
@@ -228,7 +386,10 @@ public class SchedulerService {
         if (seconds < 1) {
             throw new IllegalArgumentException("seconds must be at least 1");
         }
-        CookingSession session = loadSession(sessionId);
+        CookingSession session = loadSessionForUpdate(sessionId);
+        if (session.getStatus() != SessionStatus.ACTIVE) {
+            return buildSnapshot(session, "This cooking session is no longer active.");
+        }
         SessionDishStep step = findStep(session, stepId)
                 .orElseThrow(() -> new ResourceNotFoundException("Step not found: " + stepId));
         if (step.getStatus() != StepStatus.IN_PROGRESS) {
@@ -242,7 +403,8 @@ public class SchedulerService {
         step.setTimerEndAt(Instant.now().plusSeconds(seconds));
         sessionRepository.save(session);
 
-        timerService.startTimer(step.getId(), seconds, () -> handleTimerElapsed(sessionId, step.getId()));
+        timerService.startTimer(sessionId, step.getId(), seconds,
+                () -> self.getObject().handleTimerElapsed(sessionId, step.getId()));
 
         SessionSnapshotDto snapshot = buildSnapshot(session, "Timer started for " + seconds + " seconds.");
         notificationService.pushSnapshot(sessionId, snapshot);
@@ -252,7 +414,10 @@ public class SchedulerService {
     /** User says "wait" after a timer completes: keep the resource held, don't advance, just re-confirm state. */
     @Transactional
     public SessionSnapshotDto waitOnStep(UUID sessionId, UUID stepId) {
-        CookingSession session = loadSession(sessionId);
+        CookingSession session = loadSessionForUpdate(sessionId);
+        if (session.getStatus() != SessionStatus.ACTIVE) {
+            return buildSnapshot(session, "This cooking session is no longer active.");
+        }
         SessionDishStep step = findStep(session, stepId)
                 .orElseThrow(() -> new ResourceNotFoundException("Step not found: " + stepId));
         if (step.getStatus() != StepStatus.TIMER_COMPLETED_AWAITING_USER) {
@@ -266,15 +431,20 @@ public class SchedulerService {
     private void completeStepInternal(CookingSession session, SessionDish dish, SessionDishStep step) {
         step.setStatus(StepStatus.COMPLETED);
         timerService.cancelTimer(step.getId());
+        timerService.cancelUserReminder(session.getId(), step.getId());
 
         if (step.getAssignedStoveIndex() != null) {
             session.getStoves().stream()
                     .filter(s -> s.getStoveIndex() == step.getAssignedStoveIndex())
                     .findFirst()
+                    .filter(stove -> step.getId().equals(stove.getOccupiedByStepId()))
                     .ifPresent(stove -> {
                         stove.setBusy(false);
                         stove.setOccupiedByStepId(null);
                     });
+        }
+        if (step.getId().equals(session.getUserOccupiedByStepId())) {
+            session.setUserOccupiedByStepId(null);
         }
 
         dish.setCurrentStepIndex(dish.getCurrentStepIndex() + 1);
@@ -283,19 +453,13 @@ public class SchedulerService {
         }
     }
 
-    private boolean isUserBusy(CookingSession session) {
-        return session.getDishes().stream()
-                .flatMap(d -> d.getSteps().stream())
-                .anyMatch(s -> s.getStepType() == StepType.USER_ACTION
-                        && (s.getStatus() == StepStatus.IN_PROGRESS || s.getStatus() == StepStatus.TIMER_RUNNING))
-                ||
-                session.getDishes().stream()
-                        .flatMap(d -> d.getSteps().stream())
-                        .anyMatch(s -> s.getStatus() == StepStatus.TIMER_COMPLETED_AWAITING_USER);
-    }
-
     private CookingSession loadSession(UUID sessionId) {
         return sessionRepository.findById(sessionId)
+                .orElseThrow(() -> new ResourceNotFoundException("Cooking session not found: " + sessionId));
+    }
+
+    private CookingSession loadSessionForUpdate(UUID sessionId) {
+        return sessionRepository.findByIdForUpdate(sessionId)
                 .orElseThrow(() -> new ResourceNotFoundException("Cooking session not found: " + sessionId));
     }
 
@@ -314,9 +478,12 @@ public class SchedulerService {
     }
 
     private String computeMessage(CookingSession session) {
+        Optional<SessionDishStep> activeUserStep = Optional.ofNullable(session.getUserOccupiedByStepId())
+                .flatMap(stepId -> findStep(session, stepId));
+        if (activeUserStep.isPresent()) return activeUserStep.get().getInstruction();
         return session.getDishes().stream()
                 .flatMap(d -> d.getSteps().stream())
-                .filter(s -> s.getStatus() == StepStatus.IN_PROGRESS && s.getStepType() == StepType.USER_ACTION)
+                .filter(s -> s.getStatus() == StepStatus.TIMER_COMPLETED_AWAITING_USER)
                 .findFirst()
                 .map(s -> s.getInstruction())
                 .orElseGet(() -> {
@@ -355,12 +522,10 @@ public class SchedulerService {
             dto.stoves.add(s);
         }
 
-        session.getDishes().stream()
-                .flatMap(d -> d.getSteps().stream().map(s -> Map1.of(d, s)))
-                .filter(pair -> pair.step().getStepType() == StepType.USER_ACTION
-                        && (pair.step().getStatus() == StepStatus.IN_PROGRESS || pair.step().getStatus() == StepStatus.TIMER_RUNNING
-                        || pair.step().getStatus() == StepStatus.TIMER_COMPLETED_AWAITING_USER))
-                .findFirst()
+        Optional<Map1> currentUserPair = Optional.ofNullable(session.getUserOccupiedByStepId())
+                .flatMap(stepId -> findStep(session, stepId)
+                        .map(step -> new Map1(findDishOwning(session, step), step)));
+        currentUserPair
                 .or(() -> session.getDishes().stream()
                         .flatMap(d -> d.getSteps().stream().map(s -> Map1.of(d, s)))
                         .filter(pair -> pair.step().getStatus() == StepStatus.TIMER_COMPLETED_AWAITING_USER)
@@ -396,7 +561,7 @@ public class SchedulerService {
             throw new IllegalArgumentException("Session ID cannot be null");
         }
 
-        if (stoveIndex < 0) {
+        if (stoveIndex < 1) {
             throw new IllegalArgumentException("Invalid stove index");
         }
 
@@ -407,17 +572,49 @@ public class SchedulerService {
         // 3. Get stove from session
         List<StoveResource> stoves = session.getStoves();
 
-        if (stoves == null || stoveIndex >= stoves.size()) {
+        if (stoves == null || stoves.stream().noneMatch(stove -> stove.getStoveIndex() == stoveIndex)) {
             throw new RuntimeException("Stove not found for given index");
         }
 
-        StoveResource stove = stoves.get(stoveIndex);
+        StoveResource stove = stoves.stream()
+                .filter(resource -> resource.getStoveIndex() == stoveIndex)
+                .findFirst()
+                .orElseThrow();
 
         // 4. Map to DTO
         StoveStatusDto dto = new StoveStatusDto();
         dto.setStoveIndex(stoveIndex);
         dto.setBusy(stove.isBusy());
         return dto;
+    }
+
+    private void cancelSessionLocked(CookingSession session) {
+        timerService.cancelTimersForSession(session.getId());
+        session.setStatus(SessionStatus.CANCELLED);
+        session.setUserOccupiedByStepId(null);
+        for (StoveResource stove : session.getStoves()) {
+            stove.setBusy(false);
+            stove.setOccupiedByStepId(null);
+        }
+        for (SessionDish dish : session.getDishes()) {
+            if (dish.getStatus() != DishStatus.COMPLETED) {
+                dish.setStatus(DishStatus.CANCELLED);
+            }
+            for (SessionDishStep step : dish.getSteps()) {
+                if (step.getStatus() != StepStatus.COMPLETED) {
+                    step.setStatus(StepStatus.CANCELLED);
+                }
+            }
+        }
+        sessionRepository.save(session);
+        SessionSnapshotDto snapshot = buildSnapshot(session, "Cooking session cancelled. Timers and resources were cleared.");
+        notificationService.pushSnapshot(session.getId(), snapshot);
+    }
+
+    private boolean isActiveStatus(StepStatus status) {
+        return status == StepStatus.IN_PROGRESS
+                || status == StepStatus.TIMER_RUNNING
+                || status == StepStatus.TIMER_COMPLETED_AWAITING_USER;
     }
 
     /** Tiny local pair record, kept private to avoid polluting the dto package with a throwaway type. */

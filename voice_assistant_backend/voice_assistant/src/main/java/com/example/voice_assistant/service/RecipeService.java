@@ -6,28 +6,37 @@ import com.example.voice_assistant.dto.ai.AiStepDto;
 import com.example.voice_assistant.entity.Recipe;
 import com.example.voice_assistant.entity.RecipeIngredient;
 import com.example.voice_assistant.entity.RecipeStep;
+import com.example.voice_assistant.entity.UserRecipe;
 import com.example.voice_assistant.entity.enums.RecipeSource;
 import com.example.voice_assistant.entity.enums.StepType;
 import com.example.voice_assistant.exception.ResourceNotFoundException;
+import com.example.voice_assistant.properties.KitchenLimits;
 import com.example.voice_assistant.repository.RecipeRepository;
+import com.example.voice_assistant.repository.UserRecipeRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import java.util.Map;
-import java.util.stream.Collectors;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Service
 public class RecipeService {
 
     private final RecipeRepository recipeRepository;
+    private final UserRecipeRepository userRecipeRepository;
     private final AiFormattingService aiFormattingService;
 
-    public RecipeService(RecipeRepository recipeRepository, AiFormattingService aiFormattingService) {
+    public RecipeService(RecipeRepository recipeRepository, UserRecipeRepository userRecipeRepository,
+                         AiFormattingService aiFormattingService) {
         this.recipeRepository = recipeRepository;
+        this.userRecipeRepository = userRecipeRepository;
         this.aiFormattingService = aiFormattingService;
     }
 
@@ -49,8 +58,11 @@ public class RecipeService {
     }
 
     /** Every recipe saved by the given app user, newest first. */
+    @Transactional
     public List<Recipe> listByUserId(String userId) {
-        return recipeRepository.findByUserIdOrderByCreatedAtDesc(userId);
+        // Backfill links for recipes saved under the legacy single-owner column.
+        recipeRepository.findByUserId(userId).forEach(recipe -> linkToUser(recipe, userId));
+        return recipeRepository.findRecipesForUser(userId);
     }
 
     /** Formats a raw ancestor-recipe transcript via AI and persists it. */
@@ -88,13 +100,98 @@ public class RecipeService {
     /** Looks a dish up in the DB for the given user; if missing, asks the AI to generate + persist it. */
     @Transactional
     public Recipe findOrGenerate(String dishName, String userId) {
-        return findByDishName(dishName).orElseGet(() -> generateAndSaveRecipe(dishName, userId));
+        Optional<Recipe> existing = findByDishName(dishName);
+        if (existing.isPresent()) {
+            linkToUser(existing.get(), userId);
+            return existing.get();
+        }
+        return generateAndSaveRecipe(dishName, userId);
+    }
+
+    /** Records that the user has added/made this recipe, so it shows up in their own list. */
+    private void linkToUser(Recipe recipe, String userId) {
+        if (recipe == null || userId == null || userId.isBlank()) return;
+        if (!userRecipeRepository.existsByUserIdAndRecipeId(userId, recipe.getId())) {
+            userRecipeRepository.save(new UserRecipe(userId, recipe));
+        }
+    }
+
+    /**
+     * Multi-dish meal generation: checks the DB FIRST and reuses the stored JSON for any dish that
+     * already exists, then asks Gemini in ONE call for independent (never combined/combo) recipes
+     * for the remaining dishes only. Each generated recipe is saved as its own row.
+     *
+     * @return the recipes in the same order the dishes were requested.
+     */
+    @Transactional
+    public List<Recipe> generateOrReuseRecipes(List<String> dishNames, String userId) {
+        List<String> requested = dishNames == null ? List.of() : dishNames.stream()
+                .filter(name -> name != null && !name.isBlank())
+                .map(String::trim)
+                .distinct()
+                .toList();
+        if (requested.size() > KitchenLimits.MAX_DISHES) {
+            throw new IllegalArgumentException("A meal can contain at most " + KitchenLimits.MAX_DISHES + " dishes");
+        }
+
+        Map<String, Recipe> resolved = new LinkedHashMap<>();
+        List<String> missing = new ArrayList<>();
+
+        // 1. Already in the DB? Reuse its stored JSON and just link it to this user.
+        for (String name : requested) {
+            Optional<Recipe> existing = findByDishName(name);
+            if (existing.isPresent()) {
+                linkToUser(existing.get(), userId);
+                resolved.put(normalize(name), existing.get());
+            } else {
+                missing.add(name);
+            }
+        }
+
+        // 2. Ask the AI only for the dishes that are missing, all in a single call.
+        if (!missing.isEmpty()) {
+            AiFormattingService.AiBatchFormattingResult batch = aiFormattingService.generateRecipes(missing);
+            Map<String, AiRecipeResponseDto> generatedByName = new HashMap<>();
+            if (batch.recipes() != null) {
+                for (AiRecipeResponseDto dto : batch.recipes()) {
+                    if (dto != null && dto.dishName != null && !dto.dishName.isBlank()) {
+                        generatedByName.putIfAbsent(normalize(dto.dishName), dto);
+                    }
+                }
+            }
+
+            for (String name : missing) {
+                AiRecipeResponseDto dto = generatedByName.get(normalize(name));
+                Recipe saved;
+                if (dto != null) {
+                    saved = saveFromAi(dto, RecipeSource.AI_GENERATED, "AI", userId, batch.rawJson());
+                } else {
+                    // AI skipped/renamed this one: fall back to a single-dish call so the meal still works.
+                    saved = generateAndSaveRecipe(name, userId);
+                }
+                resolved.put(normalize(name), saved);
+            }
+        }
+
+        // 3. Keep the order the user asked for.
+        List<Recipe> ordered = new ArrayList<>();
+        for (String name : requested) {
+            Recipe recipe = resolved.get(normalize(name));
+            if (recipe != null) {
+                ordered.add(recipe);
+            }
+        }
+        return ordered;
     }
 
     private Recipe saveFromAi(AiFormattingService.AiFormattingResult result, RecipeSource source,
                               String createdBy, String userId) {
-        AiRecipeResponseDto ai = result.recipe();
-        if (ai.dishName == null || ai.dishName.isBlank()) {
+        return saveFromAi(result.recipe(), source, createdBy, userId, result.rawJson());
+    }
+
+    private Recipe saveFromAi(AiRecipeResponseDto ai, RecipeSource source,
+                              String createdBy, String userId, String rawJson) {
+        if (ai == null || ai.dishName == null || ai.dishName.isBlank()) {
             throw new IllegalStateException("AI response did not include a dish name");
         }
 
@@ -111,7 +208,7 @@ public class RecipeService {
         if (userId != null && !userId.isBlank() && recipe.getUserId() == null) {
             recipe.setUserId(userId);
         }
-        recipe.setRawAiJson(result.rawJson());
+        recipe.setRawAiJson(rawJson);
 
         recipe.getIngredients().clear();
         for (AiIngredientDto i : ai.ingredients) {
@@ -138,7 +235,9 @@ public class RecipeService {
             recipe.addStep(step);
         }
 
-        return recipeRepository.save(recipe);
+        Recipe saved = recipeRepository.save(recipe);
+        linkToUser(saved, userId);
+        return saved;
     }
 
     private StepType parseStepType(String raw) {

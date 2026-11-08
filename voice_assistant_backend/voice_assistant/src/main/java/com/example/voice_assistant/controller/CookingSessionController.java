@@ -6,6 +6,7 @@ import com.example.voice_assistant.dto.response.SessionSnapshotDto;
 import com.example.voice_assistant.dto.response.StoveStatusDto;
 import com.example.voice_assistant.entity.CookingSession;
 import com.example.voice_assistant.entity.SessionDish;
+import com.example.voice_assistant.security.AppUserDetails;
 import com.example.voice_assistant.service.CookingSessionService;
 import com.example.voice_assistant.service.SchedulerService;
 import jakarta.validation.Valid;
@@ -40,7 +41,9 @@ public class CookingSessionController {
      */
     @PostMapping("/start")
     public CookingSession start(@Valid @RequestBody StartSessionRequest request, Authentication authentication) {
-        return cookingSessionService.startSession(authentication.getName(), request.getNumberOfStoves());
+        // Session ownership uses the JWT user id (not the username) so it matches Recipe.userId.
+        String userId = ((AppUserDetails) authentication.getPrincipal()).getId().toString();
+        return cookingSessionService.startSession(userId, request.getNumberOfStoves());
     }
 
     @GetMapping("/{sessionId}/stoves/{stoveIndex}")
@@ -96,5 +99,11 @@ public class CookingSessionController {
     @PostMapping("/{sessionId}/tick")
     public SessionSnapshotDto tick(@PathVariable UUID sessionId) {
         return schedulerService.tick(sessionId);
+    }
+
+    /** Explicitly ends a session, clears its resource reservations, and cancels in-memory timers. */
+    @PostMapping("/{sessionId}/cancel")
+    public SessionSnapshotDto cancel(@PathVariable UUID sessionId) {
+        return schedulerService.cancelSession(sessionId);
     }
 }

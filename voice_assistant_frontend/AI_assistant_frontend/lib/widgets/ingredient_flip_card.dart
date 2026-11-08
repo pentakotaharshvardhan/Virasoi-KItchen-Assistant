@@ -11,7 +11,15 @@ import '../view_models/ingredient_viewmodel.dart';
 /// image + quantity, then flips back closed on dismiss.
 class IngredientFlipCard extends StatelessWidget {
   final IngredientModel ingredient;
-  const IngredientFlipCard({super.key, required this.ingredient});
+
+  /// In a multi-dish meal the card also says which dishes need this item.
+  final bool showDishNames;
+
+  const IngredientFlipCard({
+    super.key,
+    required this.ingredient,
+    this.showDishNames = false,
+  });
 
   void _openExpanded(BuildContext context) {
     Navigator.of(context).push(
@@ -20,7 +28,11 @@ class IngredientFlipCard extends StatelessWidget {
         barrierDismissible: true,
         barrierColor: Colors.black87,
         transitionDuration: const Duration(milliseconds: 420),
-        pageBuilder: (_, anim, __) => _ExpandedIngredientView(ingredient: ingredient, animation: anim),
+        pageBuilder: (_, anim, __) => _ExpandedIngredientView(
+        ingredient: ingredient,
+        animation: anim,
+        showDishNames: showDishNames,
+      ),
       ),
     );
   }
@@ -92,6 +104,14 @@ class IngredientFlipCard extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w500, color: AppColors.textSecondary),
                     ),
+                    if (showDishNames && ingredient.dishNames.isNotEmpty)
+                      Text(
+                        ingredient.dishNamesLabel,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(fontSize: 8, fontWeight: FontWeight.w600, color: AppColors.primary),
+                      ),
                   ],
                 ),
               ),
@@ -106,7 +126,12 @@ class IngredientFlipCard extends StatelessWidget {
 class _ExpandedIngredientView extends StatelessWidget {
   final IngredientModel ingredient;
   final Animation<double> animation;
-  const _ExpandedIngredientView({required this.ingredient, required this.animation});
+  final bool showDishNames;
+  const _ExpandedIngredientView({
+    required this.ingredient,
+    required this.animation,
+    this.showDishNames = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -159,6 +184,17 @@ class _ExpandedIngredientView extends StatelessWidget {
                             Text(ingredient.name, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700)),
                             const SizedBox(height: 6),
                             Text('Needed: ${ingredient.quantityLabel}', style: const TextStyle(color: AppColors.textSecondary)),
+                            if (showDishNames && ingredient.dishNames.isNotEmpty) ...[
+                              const SizedBox(height: 4),
+                              Text(
+                                'For: ${ingredient.dishNamesLabel}',
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(
+                                    color: AppColors.primary,
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 13),
+                              ),
+                            ],
                           ],
                         ),
                       ),

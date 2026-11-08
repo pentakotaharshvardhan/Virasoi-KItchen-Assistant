@@ -65,8 +65,12 @@ class AiAssistantApp extends StatelessWidget {
             case AppRoutes.createRecipe:
               return MaterialPageRoute(builder: (_) => const CreateRecipePage());
             case AppRoutes.ingredients:
-              final id = settings.arguments as String;
-              return MaterialPageRoute(builder: (_) => IngredientPage(recipeId: id));
+              // Accepts a single recipe id or a list of ids for a multi-dish meal.
+              final rawIds = settings.arguments;
+              final recipeIds = rawIds is List
+                  ? rawIds.map((e) => e.toString()).toList()
+                  : <String>[rawIds.toString()];
+              return MaterialPageRoute(builder: (_) => IngredientPage(recipeIds: recipeIds));
             case AppRoutes.voiceAssistant:
               final args = settings.arguments;
               String? sid;

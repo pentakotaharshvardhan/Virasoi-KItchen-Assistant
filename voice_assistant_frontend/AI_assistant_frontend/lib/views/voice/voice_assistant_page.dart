@@ -35,7 +35,7 @@ class VoiceAssistantPage extends StatefulWidget {
 }
 
 class _VoiceAssistantPageState extends State<VoiceAssistantPage>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   late final VoiceViewModel _vm;
   IngredientViewModel? _ing;
 
@@ -46,13 +46,14 @@ class _VoiceAssistantPageState extends State<VoiceAssistantPage>
   final TextEditingController _textController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
 
-  late final AnimationController _pulse =
-      AnimationController(vsync: this, duration: const Duration(milliseconds: 750))
-        ..repeat(reverse: true);
+  late final AnimationController _pulse = AnimationController(
+      vsync: this, duration: const Duration(milliseconds: 750))
+    ..repeat(reverse: true);
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _vm = context.read<VoiceViewModel>();
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await _vm.init(widget.sessionId, helpMode: widget.helpMode);
@@ -73,7 +74,18 @@ class _VoiceAssistantPageState extends State<VoiceAssistantPage>
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive) {
+      _vm.pauseSessionHeartbeat();
+    } else if (state == AppLifecycleState.resumed) {
+      _vm.resumeSessionHeartbeat();
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _pulse.dispose();
     _textController.dispose();
     _scrollController.dispose();
@@ -96,7 +108,8 @@ class _VoiceAssistantPageState extends State<VoiceAssistantPage>
     } else {
       // Re-arm the question so the user can simply say "ready" again after the error.
       await _vm.beginReadyCheck(onReady: _handleUserReady, announce: false);
-      _vm.speakText(ing.errorMessage ?? "Sorry, I couldn't start cooking. Please try again.");
+      _vm.speakText(ing.errorMessage ??
+          "Sorry, I couldn't start cooking. Please try again.");
     }
   }
 
@@ -157,7 +170,8 @@ class _VoiceAssistantPageState extends State<VoiceAssistantPage>
         builder: (context, _) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (_scrollController.hasClients) {
-              _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+              _scrollController
+                  .jumpTo(_scrollController.position.maxScrollExtent);
             }
           });
 
@@ -168,7 +182,9 @@ class _VoiceAssistantPageState extends State<VoiceAssistantPage>
                 duration: const Duration(milliseconds: 250),
                 curve: Curves.easeOut,
                 alignment: Alignment.topCenter,
-                child: _showSteps ? _buildStepsPanel() : const SizedBox(width: double.infinity),
+                child: _showSteps
+                    ? _buildStepsPanel()
+                    : const SizedBox(width: double.infinity),
               ),
 
               // Conversation.
@@ -198,7 +214,8 @@ class _VoiceAssistantPageState extends State<VoiceAssistantPage>
                 ? 'Ask me anything about how the app works.'
                 : 'Say a command or type below to get started.',
             textAlign: TextAlign.center,
-            style: const TextStyle(color: AppColors.textSecondary, fontSize: 14, height: 1.4),
+            style: const TextStyle(
+                color: AppColors.textSecondary, fontSize: 14, height: 1.4),
           ),
         ),
       );
@@ -218,18 +235,22 @@ class _VoiceAssistantPageState extends State<VoiceAssistantPage>
       case VoiceState.listening:
         icon = ScaleTransition(
           scale: Tween<double>(begin: 0.8, end: 1.25).animate(_pulse),
-          child: const Icon(Icons.graphic_eq_rounded, color: AppColors.primary, size: 20),
+          child: const Icon(Icons.graphic_eq_rounded,
+              color: AppColors.primary, size: 20),
         );
       case VoiceState.thinking:
         icon = const SizedBox(
           width: 16,
           height: 16,
-          child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.secondary),
+          child: CircularProgressIndicator(
+              strokeWidth: 2, color: AppColors.secondary),
         );
       case VoiceState.speaking:
-        icon = const Icon(Icons.volume_up_rounded, color: AppColors.secondary, size: 18);
+        icon = const Icon(Icons.volume_up_rounded,
+            color: AppColors.secondary, size: 18);
       case VoiceState.idle:
-        icon = const Icon(Icons.mic_none_rounded, color: AppColors.textSecondary, size: 18);
+        icon = const Icon(Icons.mic_none_rounded,
+            color: AppColors.textSecondary, size: 18);
     }
 
     return Padding(
@@ -259,7 +280,8 @@ class _VoiceAssistantPageState extends State<VoiceAssistantPage>
     return Container(
       decoration: BoxDecoration(
         color: AppColors.surface,
-        border: Border(top: BorderSide(color: AppColors.divider.withOpacity(0.4))),
+        border:
+            Border(top: BorderSide(color: AppColors.divider.withOpacity(0.4))),
       ),
       padding: const EdgeInsets.fromLTRB(10, 8, 10, 12),
       child: SafeArea(
@@ -275,7 +297,8 @@ class _VoiceAssistantPageState extends State<VoiceAssistantPage>
                 ),
                 child: live.isNotEmpty
                     ? Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 13),
                         child: Row(
                           children: [
                             const Icon(Icons.hearing_rounded,
@@ -300,13 +323,16 @@ class _VoiceAssistantPageState extends State<VoiceAssistantPage>
                         controller: _textController,
                         textInputAction: TextInputAction.send,
                         onSubmitted: (_) => _sendTyped(),
-                        style: const TextStyle(color: AppColors.textPrimary, fontSize: 15),
+                        style: const TextStyle(
+                            color: AppColors.textPrimary, fontSize: 15),
                         decoration: InputDecoration(
                           hintText: 'Type a command...',
-                          hintStyle: const TextStyle(color: AppColors.textSecondary, fontSize: 15),
+                          hintStyle: const TextStyle(
+                              color: AppColors.textSecondary, fontSize: 15),
                           border: InputBorder.none,
                           isDense: true,
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 13),
                         ),
                       ),
               ),
@@ -315,7 +341,8 @@ class _VoiceAssistantPageState extends State<VoiceAssistantPage>
             IconButton(
               onPressed: _sendTyped,
               tooltip: 'Send',
-              icon: const Icon(Icons.send_rounded, color: AppColors.primary, size: 24),
+              icon: const Icon(Icons.send_rounded,
+                  color: AppColors.primary, size: 24),
             ),
             const SizedBox(width: 2),
             GestureDetector(
@@ -326,7 +353,9 @@ class _VoiceAssistantPageState extends State<VoiceAssistantPage>
                 height: 46,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: _vm.state == VoiceState.listening ? AppColors.error : AppColors.primary,
+                  color: _vm.state == VoiceState.listening
+                      ? AppColors.error
+                      : AppColors.primary,
                   boxShadow: [
                     BoxShadow(
                       color: (_vm.state == VoiceState.listening
@@ -339,7 +368,9 @@ class _VoiceAssistantPageState extends State<VoiceAssistantPage>
                   ],
                 ),
                 child: Icon(
-                  _vm.state == VoiceState.listening ? Icons.stop_rounded : Icons.mic_rounded,
+                  _vm.state == VoiceState.listening
+                      ? Icons.stop_rounded
+                      : Icons.mic_rounded,
                   color: Colors.white,
                   size: 24,
                 ),
@@ -379,7 +410,8 @@ class _VoiceAssistantPageState extends State<VoiceAssistantPage>
   }
 
   String get _progressLabel {
-    if (_vm.lastSnapshot == null) return _steps.isEmpty ? '' : 'Not started yet';
+    if (_vm.lastSnapshot == null)
+      return _steps.isEmpty ? '' : 'Not started yet';
     if (_steps.isNotEmpty) {
       if (_allDishesDone) return 'All ${_steps.length} steps done';
       final done = _completedSteps.clamp(0, _steps.length);
@@ -412,7 +444,8 @@ class _VoiceAssistantPageState extends State<VoiceAssistantPage>
         children: [
           Row(
             children: [
-              const Icon(Icons.menu_book_rounded, size: 18, color: AppColors.secondary),
+              const Icon(Icons.menu_book_rounded,
+                  size: 18, color: AppColors.secondary),
               const SizedBox(width: 8),
               const Expanded(
                 child: Text(
@@ -426,7 +459,8 @@ class _VoiceAssistantPageState extends State<VoiceAssistantPage>
               ),
               if (_progressLabel.isNotEmpty)
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                   decoration: BoxDecoration(
                     color: AppColors.primary.withOpacity(0.15),
                     borderRadius: BorderRadius.circular(12),
@@ -505,7 +539,8 @@ class _StepTile extends StatelessWidget {
   final bool done;
   final bool current;
 
-  const _StepTile({required this.step, required this.done, required this.current});
+  const _StepTile(
+      {required this.step, required this.done, required this.current});
 
   @override
   Widget build(BuildContext context) {
@@ -517,9 +552,11 @@ class _StepTile extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.only(top: 1),
             child: done
-                ? const Icon(Icons.check_circle_rounded, size: 18, color: AppColors.success)
+                ? const Icon(Icons.check_circle_rounded,
+                    size: 18, color: AppColors.success)
                 : current
-                    ? const Icon(Icons.radio_button_checked, size: 18, color: AppColors.primary)
+                    ? const Icon(Icons.radio_button_checked,
+                        size: 18, color: AppColors.primary)
                     : const Icon(Icons.radio_button_unchecked,
                         size: 18, color: AppColors.textSecondary),
           ),
@@ -539,7 +576,8 @@ class _StepTile extends StatelessWidget {
             const SizedBox(width: 8),
             Text(
               step.durationLabel,
-              style: const TextStyle(fontSize: 11.5, color: AppColors.textSecondary),
+              style: const TextStyle(
+                  fontSize: 11.5, color: AppColors.textSecondary),
             ),
           ],
         ],
@@ -562,7 +600,8 @@ class _ChatBubble extends StatelessWidget {
       child: Container(
         margin: const EdgeInsets.symmetric(vertical: 4),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.78),
+        constraints:
+            BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.78),
         decoration: BoxDecoration(
           color: isUser
               ? AppColors.primary.withOpacity(live ? 0.10 : 0.22)
@@ -573,7 +612,9 @@ class _ChatBubble extends StatelessWidget {
             bottomLeft: Radius.circular(isUser ? 16 : 4),
             bottomRight: Radius.circular(isUser ? 4 : 16),
           ),
-          border: live ? Border.all(color: AppColors.primary.withOpacity(0.4)) : null,
+          border: live
+              ? Border.all(color: AppColors.primary.withOpacity(0.4))
+              : null,
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -594,7 +635,8 @@ class _ChatBubble extends StatelessWidget {
               const SizedBox(
                 width: 8,
                 height: 8,
-                child: CircularProgressIndicator(strokeWidth: 1.5, color: AppColors.primary),
+                child: CircularProgressIndicator(
+                    strokeWidth: 1.5, color: AppColors.primary),
               ),
             ],
           ],

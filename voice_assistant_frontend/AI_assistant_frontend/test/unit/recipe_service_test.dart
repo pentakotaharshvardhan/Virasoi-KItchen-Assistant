@@ -127,6 +127,46 @@ void main() {
     expect(body, {'dishName': 'Dal Makhani', 'userId': 'user-42'});
   });
 
+  test('generateRecipesBatch posts every dishName in one request', () async {
+    late Uri requested;
+    late Map<String, dynamic> body;
+    final api = ApiClient.withClient(MockClient((request) async {
+      requested = request.url;
+      body = jsonDecode(request.body) as Map<String, dynamic>;
+      return jsonResponse([
+        recipeJson(id: 'r-1', dishName: 'Paneer'),
+        recipeJson(id: 'r-2', dishName: 'Naan'),
+      ]);
+    }));
+
+    final result = await RecipeService(api: api).generateRecipesBatch(
+      dishNames: ['Paneer', 'Naan'],
+      userId: 'user-42',
+    );
+
+    expect(requested.path, '/api/recipes/generate-batch');
+    expect(body, {
+      'dishNames': ['Paneer', 'Naan'],
+      'userId': 'user-42',
+    });
+    final recipes = (result as Success<List<RecipeModel>>).data;
+    expect(recipes.map((r) => r.dishName), ['Paneer', 'Naan']);
+  });
+
+  test('generateRecipesBatch omits the userId when none is given', () async {
+    late Map<String, dynamic> body;
+    final api = ApiClient.withClient(MockClient((request) async {
+      body = jsonDecode(request.body) as Map<String, dynamic>;
+      return jsonResponse([recipeJson()]);
+    }));
+
+    await RecipeService(api: api).generateRecipesBatch(dishNames: ['Idli']);
+
+    expect(body, {
+      'dishNames': ['Idli']
+    });
+  });
+
   test('findOrGenerateRecipe posts to its own endpoint', () async {
     late Uri requested;
     final api = ApiClient.withClient(MockClient((request) async {

@@ -4,6 +4,7 @@ import com.example.voice_assistant.entity.*;
 import com.example.voice_assistant.entity.enums.DishStatus;
 import com.example.voice_assistant.entity.enums.SessionStatus;
 import com.example.voice_assistant.exception.ResourceNotFoundException;
+import com.example.voice_assistant.properties.KitchenLimits;
 import com.example.voice_assistant.properties.KitchenProperties;
 import com.example.voice_assistant.repository.CookingSessionRepository;
 import org.springframework.stereotype.Service;
@@ -30,6 +31,9 @@ public class CookingSessionService {
     public CookingSession startSession(String userId, int numberOfStoves) {
         if (numberOfStoves < 1) {
             throw new IllegalArgumentException("numberOfStoves must be at least 1");
+        }
+        if (numberOfStoves > KitchenLimits.MAX_STOVES) {
+            throw new IllegalArgumentException("numberOfStoves must not exceed " + KitchenLimits.MAX_STOVES);
         }
         CookingSession session = new CookingSession();
         session.setUserId(userId);
@@ -58,14 +62,20 @@ public class CookingSessionService {
         if (servesRequested < 1) {
             throw new IllegalArgumentException("servesRequested must be at least 1");
         }
-        Recipe recipe = recipeService.findOrGenerate(dishName);
+        CookingSession lockedSession = sessionRepository.findByIdForUpdate(session.getId())
+                .orElseThrow(() -> new ResourceNotFoundException("Cooking session not found: " + session.getId()));
+        if (lockedSession.getDishes().size() >= KitchenLimits.MAX_DISHES) {
+            throw new IllegalStateException("A cooking session can have at most " + KitchenLimits.MAX_DISHES + " dishes");
+        }
+
+        Recipe recipe = recipeService.findOrGenerate(dishName, lockedSession.getUserId());
 
         SessionDish dish = new SessionDish();
-        dish.setSession(session);
+        dish.setSession(lockedSession);
         dish.setRecipe(recipe);
         dish.setDishName(recipe.getDishName());
         dish.setServesRequested(servesRequested);
-        dish.setPriorityOrder(session.getDishes().size());
+        dish.setPriorityOrder(lockedSession.getDishes().size());
         dish.setStatus(DishStatus.PENDING);
         dish.setCurrentStepIndex(0);
 
@@ -80,8 +90,8 @@ public class CookingSessionService {
             dish.addStep(sds);
         }
 
-        session.getDishes().add(dish);
-        sessionRepository.save(session);
+        lockedSession.getDishes().add(dish);
+        sessionRepository.save(lockedSession);
         return dish;
     }
 

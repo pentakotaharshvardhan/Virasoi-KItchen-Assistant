@@ -1,1 +1,7 @@
+com\example\voice_assistant\service\SchedulerServiceTest.class
+com\example\voice_assistant\service\VoiceCommandServiceTest.class
+com\example\voice_assistant\service\RecipeServiceLimitTest.class
+com\example\voice_assistant\dto\request\RequestLimitValidationTest.class
 com\example\voice_assistant\VoiceAssistantApplicationTests.class
+com\example\voice_assistant\service\CookingSessionServiceTest.class
+com\example\voice_assistant\service\TimerServiceTest.class

@@ -1,5 +1,7 @@
 package com.example.voice_assistant.dto.request;
 
+import com.example.voice_assistant.properties.KitchenLimits;
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 
 public class StartSessionRequest {
@@ -7,6 +9,7 @@ public class StartSessionRequest {
     private String userId;
 
     @Min(1)
+    @Max(value = KitchenLimits.MAX_STOVES, message = "numberOfStoves must not exceed 4")
     private int numberOfStoves;
 
     public String getUserId() { return userId; }

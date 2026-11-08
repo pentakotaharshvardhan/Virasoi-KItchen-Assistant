@@ -134,19 +134,23 @@ class FakeVoiceEngine implements VoiceEngine {
 }
 
 class FakeAiService extends AiService {
-  Result<VoiceCommandResult> commandResult =
-      Success(VoiceCommandResult(command: 'UNKNOWN'));
+  Result<VoiceCommandResult> commandResult = const Failure('AI unavailable');
   Result<String> helpResult = const Success('You can ask me to remove items.');
   Result<String> suggestionResult = const Success('');
   Result<List<CommandExample>> commandsResult = Success(const []);
 
   final List<String> classifiedTranscripts = [];
+  final List<List<String>> ingredientCandidates = [];
   final List<String> helpQuestions = [];
   final List<String> suggestions = [];
 
   @override
-  Future<Result<VoiceCommandResult>> classifyCommand(String transcript) async {
+  Future<Result<VoiceCommandResult>> classifyCommand(
+    String transcript, {
+    List<String> availableIngredientNames = const [],
+  }) async {
     classifiedTranscripts.add(transcript);
+    ingredientCandidates.add(List<String>.from(availableIngredientNames));
     return commandResult;
   }
 
@@ -180,7 +184,12 @@ class FakeRecipeService extends RecipeService {
   int listByUserCalls = 0;
   int byIdCalls = 0;
   int generateCalls = 0;
+  int batchCalls = 0;
   final List<String> generatedDishNames = [];
+  final List<List<String>> batchDishNames = [];
+  final List<String?> batchUserIds = [];
+  Result<List<RecipeModel>> batchResult = Success([sampleRecipe()]);
+  Duration batchDelay = Duration.zero;
   String? lastSearch;
   RecipeSortOption? lastSort;
   String? lastUserId;
@@ -231,6 +240,20 @@ class FakeRecipeService extends RecipeService {
   }
 
   @override
+  Future<Result<List<RecipeModel>>> generateRecipesBatch({
+    required List<String> dishNames,
+    String? userId,
+  }) async {
+    batchCalls++;
+    batchDishNames.add(List<String>.from(dishNames));
+    batchUserIds.add(userId);
+    if (batchDelay > Duration.zero) {
+      await Future<void>.delayed(batchDelay);
+    }
+    return batchResult;
+  }
+
+  @override
   Future<Result<RecipeModel>> findOrGenerateRecipe({
     required String dishName,
   }) async {
@@ -241,14 +264,18 @@ class FakeRecipeService extends RecipeService {
 
 class FakeIngredientService extends IngredientService {
   Result<RecipeModel> result = Success(recipeWithIngredients([]));
-  int calls = 0;
-  String? lastRecipeId;
+
+  /// Per-id overrides so a multi-dish meal can be faked dish by dish.
+  final Map<String, Result<RecipeModel>> resultById = {};
+
+  final List<String> requestedIds = [];
+  int get calls => requestedIds.length;
+  String? get lastRecipeId => requestedIds.isEmpty ? null : requestedIds.last;
 
   @override
   Future<Result<RecipeModel>> getRecipeWithIngredients(String recipeId) async {
-    calls++;
-    lastRecipeId = recipeId;
-    return result;
+    requestedIds.add(recipeId);
+    return resultById[recipeId] ?? result;
   }
 }
 

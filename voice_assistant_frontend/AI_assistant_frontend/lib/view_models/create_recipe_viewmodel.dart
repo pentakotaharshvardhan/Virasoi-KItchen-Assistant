@@ -7,6 +7,9 @@ import '../services/recipe_service.dart';
 import '../services/ai_service.dart';
 
 class CreateRecipeViewModel extends ChangeNotifier {
+  static const int maxStoves = 4;
+  static const int maxDishes = 4;
+
   CreateRecipeViewModel({
     RecipeService? service,
     AiService? aiService,
@@ -31,18 +34,33 @@ class CreateRecipeViewModel extends ChangeNotifier {
   Timer? _suggestTimer;
 
   Future<void> init() async {
-    stoves = await _storage.stoveCount;
+    final storedStoveCount = await _storage.stoveCount;
+    stoves = storedStoveCount < 1
+        ? 1
+        : storedStoveCount > maxStoves
+            ? maxStoves
+            : storedStoveCount;
     servings = await _storage.servingCount;
     notifyListeners();
   }
 
-  void addDish(String name) {
+  bool addDish(String name) {
     final clean = name.trim();
-    if (clean.isNotEmpty && !selectedDishes.contains(clean)) {
-      selectedDishes.add(clean);
+    if (clean.isEmpty) return false;
+    if (selectedDishes.contains(clean)) return true;
+    if (selectedDishes.length >= maxDishes) {
+      _suggestTimer?.cancel();
       suggestedDishName = '';
+      errorMessage = 'You can add up to $maxDishes dishes.';
       notifyListeners();
+      return false;
     }
+
+    selectedDishes.add(clean);
+    suggestedDishName = '';
+    errorMessage = null;
+    notifyListeners();
+    return true;
   }
 
   void removeDish(String name) {
@@ -75,6 +93,16 @@ class CreateRecipeViewModel extends ChangeNotifier {
       notifyListeners();
       return false;
     }
+    if (selectedDishes.length > maxDishes) {
+      errorMessage = 'You can add up to $maxDishes dishes.';
+      notifyListeners();
+      return false;
+    }
+    if (stoveCount < 1 || stoveCount > maxStoves) {
+      errorMessage = 'Choose between 1 and $maxStoves stoves.';
+      notifyListeners();
+      return false;
+    }
 
     isSubmitting = true;
     errorMessage = null;
@@ -87,22 +115,24 @@ class CreateRecipeViewModel extends ChangeNotifier {
 
     generated = [];
     final userId = await _storage.userId;
-    for (final dishName in selectedDishes) {
-      final result =
-          await _service.generateRecipe(dishName: dishName, userId: userId);
-      switch (result) {
-        case Success(data: final recipe):
-          generated.add(recipe);
-          notifyListeners();
-          break;
-        case Failure(message: final message):
-          isSubmitting = false;
-          errorMessage = selectedDishes.length == 1
-              ? message
-              : 'Could not generate "$dishName": $message';
-          notifyListeners();
-          return false;
-      }
+    // One backend call for the whole meal: the backend reuses any dish already in the DB and
+    // asks Gemini only for the missing ones, returning a standalone (never combined) recipe each.
+    final result = await _service.generateRecipesBatch(
+      dishNames: List<String>.from(selectedDishes),
+      userId: userId,
+    );
+    switch (result) {
+      case Success(data: final recipes):
+        generated = recipes;
+        notifyListeners();
+        break;
+      case Failure(message: final message):
+        isSubmitting = false;
+        errorMessage = selectedDishes.length == 1
+            ? message
+            : 'Could not generate the recipes: $message';
+        notifyListeners();
+        return false;
     }
 
     isSubmitting = false;

@@ -38,6 +38,13 @@ public class CookingSession {
     @JsonSerialize(using = ToStringSerializer.class)
     private Instant createdAt = Instant.now();
 
+    @Column(name = "last_heartbeat_at")
+    private Instant lastHeartbeatAt = Instant.now();
+
+    /** The step currently holding the single user resource, independent of stove ownership. */
+    @Column(name = "user_occupied_by_step_id")
+    private UUID userOccupiedByStepId;
+
     @OneToMany(mappedBy = "session", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.EAGER)
     @JsonIgnore
     private List<StoveResource> stoves = new ArrayList<>();
@@ -59,6 +66,10 @@ public class CookingSession {
     public void setStatus(SessionStatus status) { this.status = status; }
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
+    public Instant getLastHeartbeatAt() { return lastHeartbeatAt; }
+    public void setLastHeartbeatAt(Instant lastHeartbeatAt) { this.lastHeartbeatAt = lastHeartbeatAt; }
+    public UUID getUserOccupiedByStepId() { return userOccupiedByStepId; }
+    public void setUserOccupiedByStepId(UUID userOccupiedByStepId) { this.userOccupiedByStepId = userOccupiedByStepId; }
     public List<StoveResource> getStoves() { return stoves; }
     public void setStoves(List<StoveResource> stoves) { this.stoves = stoves; }
     public List<SessionDish> getDishes() { return dishes; }

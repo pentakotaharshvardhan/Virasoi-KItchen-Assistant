@@ -42,6 +42,9 @@ class VoiceViewModel extends ChangeNotifier {
   bool readyCheckActive = false;
   Future<void> Function()? onUserReady;
 
+  /// Ingredient screen supplies the exact current checklist candidates for command classification.
+  Future<List<String>> Function()? onAvailableIngredients;
+
   /// The Ingredient screen registers this so the assistant can read out whatever is still
   /// pending when the backend asks with a `remaining_items_request`.
   Future<List<String>> Function()? onRemainingItemsRequest;
@@ -49,6 +52,7 @@ class VoiceViewModel extends ChangeNotifier {
 
   Timer? _stabilityTimer;
   Timer? _absoluteTimeoutTimer;
+  Timer? _heartbeatTimer;
   String _lastLiveText = '';
   String _finalizedTranscript = '';
   String _partialTranscript = '';
@@ -57,6 +61,7 @@ class VoiceViewModel extends ChangeNotifier {
   /// False while the microphone is intentionally paused (e.g. the screen was left, or we're
   /// handing off to another screen). Prevents a finishing TTS playback from auto-resuming the mic.
   bool _active = false;
+  bool _hasBackendSession = false;
 
   Future<void> init(String? sid, {bool helpMode = false}) async {
     print("VoiceViewModel: Initializing (HelpMode: $helpMode, Session: $sid)");
@@ -66,8 +71,10 @@ class VoiceViewModel extends ChangeNotifier {
     _ws = null;
     _stabilityTimer?.cancel();
     _absoluteTimeoutTimer?.cancel();
+    _heartbeatTimer?.cancel();
 
     isHelpMode = helpMode;
+    _hasBackendSession = sid != null;
     sessionId = sid ?? const Uuid().v4();
     liveTranscript = '';
     _lastLiveText = '';
@@ -93,6 +100,7 @@ class VoiceViewModel extends ChangeNotifier {
         ApiConstants.wsVoiceAssistant(token ?? '', sessionId!), token);
     _ws!.connect();
     _ws!.messages.listen(_handleServerMessage);
+    _startSessionHeartbeat();
 
     // 3. Auto-start listening
     startListening();
@@ -234,6 +242,7 @@ class VoiceViewModel extends ChangeNotifier {
   /// (e.g. Ingredients -> Cooking) so two sockets don't both speak the same instruction.
   Future<void> detach() async {
     await pause();
+    pauseSessionHeartbeat();
     _ws?.dispose();
     _ws = null;
     sessionId = null;
@@ -275,13 +284,56 @@ class VoiceViewModel extends ChangeNotifier {
       }
     } else {
       print("DEBUG: Sending Command Transcript -> '$text'");
-      _ws?.send({
-        'type': 'user_text',
-        'sessionId': sessionId,
-        'text': text,
-        'transcript': text,
-      });
+      final availableIngredients =
+          await onAvailableIngredients?.call() ?? const <String>[];
+      final result = await _ai.classifyCommand(
+        text,
+        availableIngredientNames: availableIngredients,
+      );
+      switch (result) {
+        case Success(data: final command):
+          _ws?.send({
+            'type': 'command_result',
+            'sessionId': sessionId,
+            'text': text,
+            'result': command.toJson(),
+          });
+        case Failure():
+          // The socket path applies the same deterministic fallback classifier if REST is unavailable.
+          _ws?.send({
+            'type': 'user_text',
+            'sessionId': sessionId,
+            'text': text,
+            'transcript': text,
+            'availableIngredientNames': availableIngredients,
+          });
+      }
     }
+  }
+
+  void _startSessionHeartbeat() {
+    _heartbeatTimer?.cancel();
+    if (!_hasBackendSession || sessionId == null) return;
+    _heartbeatTimer = Timer.periodic(
+      const Duration(seconds: 45),
+      (_) => _sendHeartbeat(),
+    );
+  }
+
+  void _sendHeartbeat() {
+    if (_hasBackendSession && sessionId != null) {
+      _ws?.send({'type': 'heartbeat', 'sessionId': sessionId});
+    }
+  }
+
+  void pauseSessionHeartbeat() {
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = null;
+  }
+
+  void resumeSessionHeartbeat() {
+    _sendHeartbeat();
+    _startSessionHeartbeat();
   }
 
   /// Sends text typed into the chat input field through the exact same pipeline as speech.
@@ -373,6 +425,7 @@ class VoiceViewModel extends ChangeNotifier {
     final data = msg['data'] as Map<String, dynamic>?;
 
     if (type == 'connected') {
+      _sendHeartbeat();
       return;
     }
 
@@ -524,6 +577,7 @@ class VoiceViewModel extends ChangeNotifier {
     _ws?.dispose();
     _stabilityTimer?.cancel();
     _absoluteTimeoutTimer?.cancel();
+    _heartbeatTimer?.cancel();
     super.dispose();
   }
 }

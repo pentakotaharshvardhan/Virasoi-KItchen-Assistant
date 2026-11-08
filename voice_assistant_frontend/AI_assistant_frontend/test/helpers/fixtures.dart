@@ -108,10 +108,14 @@ List<RecipeModel> sampleRecipes() => [
       ),
     ];
 
-RecipeModel recipeWithIngredients(List<IngredientModel> ingredients) =>
+RecipeModel recipeWithIngredients(
+  List<IngredientModel> ingredients, {
+  String id = 'recipe-ing',
+  String dishName = 'Test Dish',
+}) =>
     RecipeModel(
-      id: 'recipe-ing',
-      dishName: 'Test Dish',
+      id: id,
+      dishName: dishName,
       description: 'desc',
       baseServes: 2,
       source: 'ai',

@@ -79,6 +79,8 @@ tts:
 # Kitchen-assistant tuning knobs
 # ---------------------------------------------------------------------------
 kitchen:
+  session-heartbeat-grace: PT5M
+  session-heartbeat-sweep-ms: 30000
   recipe:
     base-serves: 1                # AI always generates/formats recipes for 1 serve
     timer-scale-factor-per-serve: 0.12   # +12% timer duration per extra serve, for steps marked scalesWithServes

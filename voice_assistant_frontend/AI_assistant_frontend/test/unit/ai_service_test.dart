@@ -57,8 +57,15 @@ void main() {
     });
 
     test('keeps UNKNOWN and other command types intact', () {
-      for (final command in ['UNKNOWN', 'START', 'STOP', 'NEXT_STEP', 'COMPLETE']) {
-        expect(VoiceCommandResult.fromJson({'command': command}).command, command);
+      for (final command in [
+        'UNKNOWN',
+        'START',
+        'STOP',
+        'NEXT_STEP',
+        'COMPLETE'
+      ]) {
+        expect(
+            VoiceCommandResult.fromJson({'command': command}).command, command);
       }
     });
   });
@@ -78,7 +85,8 @@ void main() {
   });
 
   group('AiService', () {
-    test('classifyCommand posts the transcript and parses the command', () async {
+    test('classifyCommand posts transcript and ingredient candidates',
+        () async {
       late Map<String, dynamic> body;
       final api = ApiClient.withClient(MockClient((request) async {
         expect(request.url.path, '/api/ai/command');
@@ -86,20 +94,31 @@ void main() {
         return jsonResponse({
           'command': 'REMOVE',
           'ingredientName': 'Paneer',
+          'ingredientNames': ['Paneer'],
+          'stoveIndices': [1, 2],
         });
       }));
 
-      final result = await AiService(api: api).classifyCommand('remove paneer');
+      final result = await AiService(api: api).classifyCommand(
+        'remove paneer',
+        availableIngredientNames: ['Paneer', 'Onion'],
+      );
 
-      expect(body, {'transcript': 'remove paneer'});
+      expect(body, {
+        'transcript': 'remove paneer',
+        'availableIngredientNames': ['Paneer', 'Onion'],
+      });
       final command = (result as Success<VoiceCommandResult>).data;
       expect(command.command, 'REMOVE');
       expect(command.ingredientName, 'Paneer');
+      expect(command.ingredientNames, ['Paneer']);
+      expect(command.stoveIndices, [1, 2]);
     });
 
     test('classifyCommand propagates a backend failure', () async {
       final api = ApiClient.withClient(
-        MockClient((_) async => jsonResponse({'message': 'AI unavailable'}, status: 503)),
+        MockClient((_) async =>
+            jsonResponse({'message': 'AI unavailable'}, status: 503)),
       );
 
       final result = await AiService(api: api).classifyCommand('hello');
@@ -131,7 +150,8 @@ void main() {
       expect(examples.first.command, 'REMOVE');
     });
 
-    test('suggestDishName returns the input when search finds nothing', () async {
+    test('suggestDishName returns the input when search finds nothing',
+        () async {
       final api = ApiClient.withClient(MockClient((request) async {
         expect(request.url.path, '/api/recipes/search');
         expect(request.url.queryParameters['query'], 'paneer b');
@@ -143,7 +163,8 @@ void main() {
       expect((result as Success<String>).data, 'paneer b');
     });
 
-    test('suggestDishName returns the first dish name when matches exist', () async {
+    test('suggestDishName returns the first dish name when matches exist',
+        () async {
       final api = ApiClient.withClient(MockClient(
         (_) async => jsonResponse([
           {'dishName': 'Paneer Butter Masala'},

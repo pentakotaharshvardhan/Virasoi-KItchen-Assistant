@@ -1,6 +1,7 @@
 package com.example.voice_assistant.controller;
 
 import com.example.voice_assistant.dto.request.AncestorRecipeUploadRequest;
+import com.example.voice_assistant.dto.request.GenerateRecipeBatchRequest;
 import com.example.voice_assistant.dto.request.GenerateRecipeRequest;
 import com.example.voice_assistant.entity.Recipe;
 import com.example.voice_assistant.exception.ResourceNotFoundException;
@@ -59,6 +60,16 @@ public class RecipeController {
     @PostMapping("/generate")
     public Recipe generate(@Valid @RequestBody GenerateRecipeRequest request) {
         return recipeService.generateAndSaveRecipe(request.getDishName(), request.getUserId());
+    }
+
+    /**
+     * Multi-dish meal in one go: dishes already in the DB are reused from their stored JSON; only the
+     * missing ones are sent to the AI, in a single call that returns one standalone (never combined)
+     * recipe per dish. Every recipe is saved individually.
+     */
+    @PostMapping("/generate-batch")
+    public List<Recipe> generateBatch(@Valid @RequestBody GenerateRecipeBatchRequest request) {
+        return recipeService.generateOrReuseRecipes(request.getDishNames(), request.getUserId());
     }
 
     /** REST fallback for uploading an ancestor recipe from already-transcribed text. */

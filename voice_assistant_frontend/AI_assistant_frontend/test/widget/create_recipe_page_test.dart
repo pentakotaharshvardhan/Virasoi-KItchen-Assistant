@@ -8,6 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 
 import '../helpers/fakes.dart';
+import '../helpers/fixtures.dart';
 
 void main() {
   late FakeRecipeService service;
@@ -19,7 +20,8 @@ void main() {
     service = FakeRecipeService();
     ai = FakeAiService();
     storage = SecureStorage.inMemory();
-    vm = CreateRecipeViewModel(service: service, aiService: ai, storage: storage);
+    vm = CreateRecipeViewModel(
+        service: service, aiService: ai, storage: storage);
   });
 
   Widget harness() => ChangeNotifierProvider<CreateRecipeViewModel>.value(
@@ -56,7 +58,7 @@ void main() {
 
     expect(find.text('What are we cooking today?'), findsOneWidget);
     expect(find.text('Generate Recipe'), findsOneWidget);
-    expect(find.text('Stoves available'), findsOneWidget);
+    expect(find.text('Stoves available (max 4)'), findsOneWidget);
     expect(find.text('Number of servings'), findsOneWidget);
   });
 
@@ -86,6 +88,39 @@ void main() {
     expect(vm.selectedDishes, ['Paneer']);
   });
 
+  testWidgets('dish selection stops at four', (tester) async {
+    await tester.pumpWidget(harness());
+    await tester.pumpAndSettle();
+
+    for (var i = 1; i <= CreateRecipeViewModel.maxDishes; i++) {
+      await addDish(tester, 'Dish $i');
+    }
+    await addDish(tester, 'Dish 5');
+
+    expect(vm.selectedDishes, hasLength(CreateRecipeViewModel.maxDishes));
+    expect(find.text('You can add up to 4 dishes.'), findsOneWidget);
+  });
+
+  testWidgets('stove selection cannot exceed four', (tester) async {
+    await tester.pumpWidget(harness());
+    await tester.pumpAndSettle();
+
+    for (var i = 0; i < 3; i++) {
+      await tester.tap(find.byIcon(Icons.add_circle_outline_rounded).at(0));
+      await tester.pump();
+    }
+
+    expect(find.text('4'), findsOneWidget);
+    final stovePlusButton = find.ancestor(
+      of: find.byIcon(Icons.add_circle_outline_rounded).at(0),
+      matching: find.byType(IconButton),
+    );
+    expect(
+      tester.widget<IconButton>(stovePlusButton).onPressed,
+      isNull,
+    );
+  });
+
   testWidgets('generating with no dish shows a SnackBar', (tester) async {
     await tester.pumpWidget(harness());
     await tester.pumpAndSettle();
@@ -95,10 +130,12 @@ void main() {
     await tester.pump(const Duration(milliseconds: 750));
 
     expect(find.text('Please add at least one dish.'), findsOneWidget);
-    expect(service.generateCalls, 0);
+    expect(service.batchCalls, 0);
   });
 
-  testWidgets('generating navigates to ingredients with the new recipe id', (tester) async {
+  testWidgets('generating navigates to the items screen with the recipe id',
+      (tester) async {
+    service.batchResult = Success([sampleRecipe(id: 'recipe-1')]);
     await tester.pumpWidget(harness());
     await tester.pumpAndSettle();
     await addDish(tester, 'Paneer');
@@ -106,10 +143,16 @@ void main() {
     await tester.tap(find.text('Generate Recipe'));
     await tester.pumpAndSettle();
 
-    expect(find.text('ING:recipe-1'), findsOneWidget);
+    expect(find.text('ING:[recipe-1]'), findsOneWidget);
   });
 
-  testWidgets('multiple generated recipes navigate to the saved recipes list', (tester) async {
+  testWidgets(
+      'every dish of a multi-dish meal is generated and opened together on the items screen',
+      (tester) async {
+    service.batchResult = Success([
+      sampleRecipe(id: 'recipe-1', dishName: 'Paneer'),
+      sampleRecipe(id: 'recipe-2', dishName: 'Naan'),
+    ]);
     await tester.pumpWidget(harness());
     await tester.pumpAndSettle();
     await addDish(tester, 'Paneer');
@@ -118,8 +161,10 @@ void main() {
     await tester.tap(find.text('Generate Recipes'));
     await tester.pumpAndSettle();
 
-    expect(service.generatedDishNames, ['Paneer', 'Naan']);
-    expect(find.text('RECIPE LIST'), findsOneWidget);
+    expect(service.batchDishNames, [
+      ['Paneer', 'Naan']
+    ]);
+    expect(find.text('ING:[recipe-1, recipe-2]'), findsOneWidget);
   });
 
   testWidgets('kitchen steppers persist through generation', (tester) async {
@@ -158,11 +203,14 @@ void main() {
     await tester.tap(find.text('Generate Recipe'));
     await tester.pumpAndSettle();
 
-    expect(service.lastGenerateDish, 'Paneer Tikka');
+    expect(service.batchDishNames, [
+      ['Paneer Tikka']
+    ]);
   });
 
-  testWidgets('a failed generation keeps the user on the page with an error', (tester) async {
-    service.generateResult = const Failure('Generation failed');
+  testWidgets('a failed generation keeps the user on the page with an error',
+      (tester) async {
+    service.batchResult = const Failure('Generation failed');
     await tester.pumpWidget(harness());
     await tester.pumpAndSettle();
     await addDish(tester, 'Paneer');

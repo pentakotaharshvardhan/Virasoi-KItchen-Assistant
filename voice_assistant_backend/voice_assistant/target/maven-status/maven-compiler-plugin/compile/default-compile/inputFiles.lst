@@ -10,11 +10,13 @@ C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_
 C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_assistant\src\main\java\com\example\voice_assistant\controller\RecipeController.java
 C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_assistant\src\main\java\com\example\voice_assistant\controller\SpeechController.java
 C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_assistant\src\main\java\com\example\voice_assistant\dto\ai\AiIngredientDto.java
+C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_assistant\src\main\java\com\example\voice_assistant\dto\ai\AiRecipeBatchResponseDto.java
 C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_assistant\src\main\java\com\example\voice_assistant\dto\ai\AiRecipeResponseDto.java
 C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_assistant\src\main\java\com\example\voice_assistant\dto\ai\AiStepDto.java
 C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_assistant\src\main\java\com\example\voice_assistant\dto\ai\VoiceCommandResultDto.java
 C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_assistant\src\main\java\com\example\voice_assistant\dto\request\AddDishRequest.java
 C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_assistant\src\main\java\com\example\voice_assistant\dto\request\AncestorRecipeUploadRequest.java
+C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_assistant\src\main\java\com\example\voice_assistant\dto\request\GenerateRecipeBatchRequest.java
 C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_assistant\src\main\java\com\example\voice_assistant\dto\request\GenerateRecipeRequest.java
 C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_assistant\src\main\java\com\example\voice_assistant\dto\request\LoginRequest.java
 C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_assistant\src\main\java\com\example\voice_assistant\dto\request\RegisterRequest.java
@@ -37,10 +39,12 @@ C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_
 C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_assistant\src\main\java\com\example\voice_assistant\entity\SessionDish.java
 C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_assistant\src\main\java\com\example\voice_assistant\entity\SessionDishStep.java
 C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_assistant\src\main\java\com\example\voice_assistant\entity\StoveResource.java
+C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_assistant\src\main\java\com\example\voice_assistant\entity\UserRecipe.java
 C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_assistant\src\main\java\com\example\voice_assistant\exception\GlobalExceptionHandler.java
 C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_assistant\src\main\java\com\example\voice_assistant\exception\ResourceNotFoundException.java
 C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_assistant\src\main\java\com\example\voice_assistant\properties\AiProperties.java
 C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_assistant\src\main\java\com\example\voice_assistant\properties\JwtProperties.java
+C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_assistant\src\main\java\com\example\voice_assistant\properties\KitchenLimits.java
 C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_assistant\src\main\java\com\example\voice_assistant\properties\KitchenProperties.java
 C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_assistant\src\main\java\com\example\voice_assistant\properties\SttProperties.java
 C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_assistant\src\main\java\com\example\voice_assistant\properties\TtsProperties.java
@@ -50,6 +54,7 @@ C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_
 C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_assistant\src\main\java\com\example\voice_assistant\repository\SessionDishRepository.java
 C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_assistant\src\main\java\com\example\voice_assistant\repository\SessionDishStepRepository.java
 C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_assistant\src\main\java\com\example\voice_assistant\repository\StoveResourceRepository.java
+C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_assistant\src\main\java\com\example\voice_assistant\repository\UserRecipeRepository.java
 C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_assistant\src\main\java\com\example\voice_assistant\security\AppUserDetails.java
 C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_assistant\src\main\java\com\example\voice_assistant\security\AppUserDetailsService.java
 C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_assistant\src\main\java\com\example\voice_assistant\security\JwtAuthenticationFilter.java
@@ -64,6 +69,7 @@ C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_
 C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_assistant\src\main\java\com\example\voice_assistant\service\NotificationService.java
 C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_assistant\src\main\java\com\example\voice_assistant\service\RecipeService.java
 C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_assistant\src\main\java\com\example\voice_assistant\service\SchedulerService.java
+C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_assistant\src\main\java\com\example\voice_assistant\service\SessionHeartbeatMonitor.java
 C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_assistant\src\main\java\com\example\voice_assistant\service\SpeechToTextService.java
 C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_assistant\src\main\java\com\example\voice_assistant\service\TextToSpeechService.java
 C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_assistant\src\main\java\com\example\voice_assistant\service\TimerService.java

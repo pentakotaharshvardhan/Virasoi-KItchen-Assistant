@@ -36,6 +36,7 @@ class ApiConstants {
   static String recipeById(String id) => '/api/recipes/$id';
   static const String searchRecipes = '/api/recipes/search';
   static const String generateRecipe = '/api/recipes/generate';
+  static const String generateRecipeBatch = '/api/recipes/generate-batch';
   static const String findOrGenerateRecipe = '/api/recipes/find-or-generate';
   static const String ancestorRecipe = '/api/recipes/ancestor';
 
@@ -44,6 +45,7 @@ class ApiConstants {
   // ---------------------------------------------------------------------
   static const String startSession = '/api/sessions/start';
   static String sessionById(String id) => '/api/sessions/$id';
+  static String sessionCancel(String id) => '/api/sessions/$id/cancel';
   static String sessionStatus(String id) => '/api/sessions/$id/status';
   static String sessionDishes(String id) => '/api/sessions/$id/dishes';
   static String sessionTick(String id) => '/api/sessions/$id/tick';

@@ -20,15 +20,18 @@ void main() {
   late Map<String, dynamic> lastSessionBody;
   late Map<String, dynamic> lastDishBody;
 
-  IngredientModel onion() => IngredientModel.fromJson(ingredientJson(id: 'i1', name: 'Onion'));
-  IngredientModel tomato() => IngredientModel.fromJson(ingredientJson(id: 'i2', name: 'Tomato'));
+  IngredientModel onion() =>
+      IngredientModel.fromJson(ingredientJson(id: 'i1', name: 'Onion'));
+  IngredientModel tomato() =>
+      IngredientModel.fromJson(ingredientJson(id: 'i2', name: 'Tomato'));
 
   ApiClient buildApi({int startStatus = 200}) {
     return ApiClient.withClient(MockClient((request) async {
       if (request.url.path == '/api/sessions/start') {
         lastSessionBody = jsonDecode(request.body) as Map<String, dynamic>;
         if (startStatus != 200) {
-          return jsonResponse({'message': 'Cannot start session'}, status: startStatus);
+          return jsonResponse({'message': 'Cannot start session'},
+              status: startStatus);
         }
         return jsonResponse({'sessionId': 'sess-1'});
       }
@@ -53,7 +56,7 @@ void main() {
   /// the socket before the test emits messages on it.
   Future<IngredientViewModel> loaded({ApiClient? api}) async {
     final vm = buildViewModel(api: api);
-    await vm.load('recipe-ing');
+    await vm.load(['recipe-ing']);
     await Future<void>.delayed(Duration.zero);
     return vm;
   }
@@ -66,14 +69,17 @@ void main() {
     dishCalls = 0;
     lastSessionBody = {};
     lastDishBody = {};
-    ingredientService.result = Success(recipeWithIngredients([onion(), tomato()]));
+    ingredientService.result =
+        Success(recipeWithIngredients([onion(), tomato()]));
   });
 
-  test('load fetches ingredients, starts a session and connects live sync without cooking', () async {
+  test(
+      'load fetches ingredients, starts a session and connects live sync without cooking',
+      () async {
     await storage.saveSession(accessToken: 'jwt', userId: 'u-1');
     final vm = buildViewModel();
 
-    await vm.load('recipe-ing');
+    await vm.load(['recipe-ing']);
     await Future<void>.delayed(Duration.zero);
 
     expect(vm.isLoading, isFalse);
@@ -81,16 +87,19 @@ void main() {
     expect(vm.sessionId, 'sess-1');
     expect(lastSessionBody['userId'], 'u-1');
     expect(lastSessionBody['numberOfStoves'], 1);
-    expect(dishCalls, 0, reason: 'cooking must not start while gathering ingredients');
+    expect(dishCalls, 0,
+        reason: 'cooking must not start while gathering ingredients');
     expect(ws.connected, isTrue);
     expect(ingredientService.lastRecipeId, 'recipe-ing');
   });
 
-  test('startCooking adds the dish using the stoves/servings saved on the setup screen', () async {
+  test(
+      'startCooking adds the dish using the stoves/servings saved on the setup screen',
+      () async {
     await storage.saveSettings(stoves: 3, servings: 4);
     final vm = buildViewModel();
 
-    await vm.load('recipe-ing');
+    await vm.load(['recipe-ing']);
     await Future<void>.delayed(Duration.zero);
     expect(lastSessionBody['numberOfStoves'], 3);
 
@@ -105,18 +114,21 @@ void main() {
   test('load enriches each ingredient with an Unsplash photo', () async {
     final vm = buildViewModel();
 
-    await vm.load('recipe-ing');
+    await vm.load(['recipe-ing']);
     await Future<void>.delayed(Duration.zero);
 
     expect(unsplash.queries, ['Onion', 'Tomato']);
-    expect(vm.pending.every((i) => i.imageUrl == 'https://images.example.test/item.jpg'), isTrue);
+    expect(
+        vm.pending
+            .every((i) => i.imageUrl == 'https://images.example.test/item.jpg'),
+        isTrue);
   });
 
   test('a null Unsplash result leaves the placeholder image', () async {
     unsplash.url = null;
     final vm = buildViewModel();
 
-    await vm.load('recipe-ing');
+    await vm.load(['recipe-ing']);
     await Future<void>.delayed(Duration.zero);
 
     expect(vm.pending.every((i) => i.imageUrl == null), isTrue);
@@ -126,7 +138,7 @@ void main() {
     ingredientService.result = const Failure('Recipe missing');
     final vm = buildViewModel();
 
-    await vm.load('nope');
+    await vm.load(['nope']);
 
     expect(vm.isLoading, isFalse);
     expect(vm.errorMessage, 'Recipe missing');
@@ -134,10 +146,11 @@ void main() {
     expect(ws.connected, isFalse);
   });
 
-  test('session start failure leaves the screen usable without live sync', () async {
+  test('session start failure leaves the screen usable without live sync',
+      () async {
     final vm = buildViewModel(api: buildApi(startStatus: 500));
 
-    await vm.load('recipe-ing');
+    await vm.load(['recipe-ing']);
 
     expect(vm.isLoading, isFalse);
     expect(vm.pending.length, 2);
@@ -152,7 +165,7 @@ void main() {
     }));
     final vm = buildViewModel(api: api);
 
-    await vm.load('recipe-ing');
+    await vm.load(['recipe-ing']);
 
     expect(vm.sessionId, isNull);
     expect(ws.connected, isFalse);
@@ -201,7 +214,8 @@ void main() {
     expect(vm.confirmed.single.name, 'Onion');
   });
 
-  test('remove_ingredient broadcast from the backend removes the matching card', () async {
+  test('remove_ingredient broadcast from the backend removes the matching card',
+      () async {
     final vm = await loaded();
 
     ws.emit({
@@ -217,19 +231,27 @@ void main() {
   test('fuzzy matching handles plurals and partial names', () async {
     ingredientService.result = Success(recipeWithIngredients([
       IngredientModel.fromJson(ingredientJson(id: 'i3', name: 'Onions')),
-      IngredientModel.fromJson(ingredientJson(id: 'i4', name: 'Ginger-Garlic Paste')),
+      IngredientModel.fromJson(
+          ingredientJson(id: 'i4', name: 'Ginger-Garlic Paste')),
     ]));
     final vm = await loaded();
 
-    ws.emit({'type': 'remove_ingredient', 'data': {'ingredientName': 'onion'}});
-    ws.emit({'type': 'remove_ingredient', 'data': {'ingredientName': 'garlic'}});
+    ws.emit({
+      'type': 'remove_ingredient',
+      'data': {'ingredientName': 'onion'}
+    });
+    ws.emit({
+      'type': 'remove_ingredient',
+      'data': {'ingredientName': 'garlic'}
+    });
     await Future<void>.delayed(Duration.zero);
 
     expect(vm.pending, isEmpty);
     expect(vm.confirmed.map((i) => i.name), ['Onions', 'Ginger-Garlic Paste']);
   });
 
-  test('a multi-ingredient remove_ingredient broadcast clears every named item', () async {
+  test('a multi-ingredient remove_ingredient broadcast clears every named item',
+      () async {
     final vm = await loaded();
 
     ws.emit({
@@ -247,7 +269,36 @@ void main() {
     expect(vm.remainingNames, isEmpty);
   });
 
-  test('a single-name field containing a list removes each matching item', () async {
+  test('a likely spelling error resolves to the unique checklist item',
+      () async {
+    ingredientService.result = Success(recipeWithIngredients([
+      IngredientModel.fromJson(ingredientJson(id: 'i3', name: 'Paneer')),
+      IngredientModel.fromJson(ingredientJson(id: 'i4', name: 'Tomato')),
+    ]));
+    final vm = await loaded();
+
+    vm.markConfirmedByNames(['panner']);
+
+    expect(vm.confirmed.map((item) => item.name), ['Paneer']);
+    expect(vm.pending.map((item) => item.name), ['Tomato']);
+  });
+
+  test('an ambiguous spelling does not remove a checklist item', () async {
+    ingredientService.result = Success(recipeWithIngredients([
+      IngredientModel.fromJson(ingredientJson(id: 'i3', name: 'Cheesy Paneer')),
+      IngredientModel.fromJson(ingredientJson(id: 'i4', name: 'Spicy Paneer')),
+    ]));
+    final vm = await loaded();
+
+    vm.markConfirmedByNames(['panner']);
+
+    expect(
+        vm.pending.map((item) => item.name), ['Cheesy Paneer', 'Spicy Paneer']);
+    expect(vm.confirmed, isEmpty);
+  });
+
+  test('a single-name field containing a list removes each matching item',
+      () async {
     final vm = await loaded();
 
     ws.emit({
@@ -326,5 +377,71 @@ void main() {
     vm.dispose();
 
     expect(ws.disposeCalls, 1);
+  });
+
+  group('multi-dish meal', () {
+    void seedTwoDishes() {
+      ingredientService.resultById['r-a'] = Success(recipeWithIngredients([
+        IngredientModel.fromJson(
+            ingredientJson(id: 'i1', name: 'Onion', quantityPerServe: 2)),
+        IngredientModel.fromJson(
+            ingredientJson(id: 'i2', name: 'Tomato', quantityPerServe: 1)),
+      ], id: 'r-a', dishName: 'Paneer Masala'));
+      ingredientService.resultById['r-b'] = Success(recipeWithIngredients([
+        IngredientModel.fromJson(
+            ingredientJson(id: 'i1', name: 'Onion', quantityPerServe: 3)),
+        IngredientModel.fromJson(
+            ingredientJson(id: 'i3', name: 'Salt', quantityPerServe: 0.5)),
+      ], id: 'r-b', dishName: 'Dal'));
+    }
+
+    test('the same item across dishes becomes ONE card with the combined total',
+        () async {
+      seedTwoDishes();
+      final vm = buildViewModel();
+
+      await vm.load(['r-a', 'r-b']);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(ingredientService.requestedIds, ['r-a', 'r-b']);
+      expect(vm.pending.map((i) => i.name), ['Onion', 'Tomato', 'Salt']);
+
+      final onion = vm.pending.first;
+      expect(onion.quantityPerServe, 5, reason: '2 pcs + 3 pcs = 5 pcs');
+      expect(onion.dishNames, ['Paneer Masala', 'Dal']);
+      expect(vm.dishCount, 2);
+      expect(
+        unsplash.queries,
+        ['Onion', 'Tomato', 'Salt'],
+        reason: 'a merged item is photographed once, not per dish',
+      );
+    });
+
+    test('startCooking adds every dish of the meal to the session', () async {
+      seedTwoDishes();
+      final vm = buildViewModel();
+
+      await vm.load(['r-a', 'r-b']);
+      await Future<void>.delayed(Duration.zero);
+
+      final ok = await vm.startCooking();
+
+      expect(ok, isTrue);
+      expect(dishCalls, 2);
+      expect(lastDishBody['dishName'], 'Dal');
+    });
+
+    test('a failing recipe load surfaces the error and never starts a session',
+        () async {
+      ingredientService.resultById['r-b'] = const Failure('Recipe missing');
+      final vm = buildViewModel();
+
+      await vm.load(['r-a', 'r-b']);
+
+      expect(vm.isLoading, isFalse);
+      expect(vm.errorMessage, 'Recipe missing');
+      expect(vm.sessionId, isNull);
+      expect(ws.connected, isFalse);
+    });
   });
 }

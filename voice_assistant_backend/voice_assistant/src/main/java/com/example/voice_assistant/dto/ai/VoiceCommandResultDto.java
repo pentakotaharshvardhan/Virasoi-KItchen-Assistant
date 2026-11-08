@@ -3,8 +3,11 @@ package com.example.voice_assistant.dto.ai;
 import java.util.List;
 
 public class VoiceCommandResultDto {
-    /** NEXT, WAIT, TIMER_YES, TIMER_NO, REPEAT, STOP, REMOVE, REMAINING_ITEMS, HELP, UNKNOWN */
+    /** NEXT, WAIT, TIMER_YES, TIMER_NO, REPEAT, STOP, REMOVE, FREE_USER, REMAINING_ITEMS, HELP, UNKNOWN */
     public String command;
+    /** All explicitly named stove indices, in spoken order. */
+    public List<Integer> stoveIndices;
+    /** Backward-compatible first stove index. */
     public Integer stoveIndex;
     public String dishName;
     public String ingredientName;

@@ -1,10 +1,17 @@
 class IngredientModel {
   final String id;
   final String name;
-  final double quantityPerServe;
+
+  /// Amount needed per serve. When several dishes need the same item, the view model
+  /// merges them into ONE card holding the combined total instead of duplicates.
+  double quantityPerServe;
+
   final String unit; // e.g. "g", "pcs", "ml"
   String? imageUrl;
   bool isConfirmedAvailable;
+
+  /// Which dishes of the current meal need this item (e.g. ["Paneer Masala", "Dal"]).
+  final List<String> dishNames;
 
   IngredientModel({
     required this.id,
@@ -13,12 +20,18 @@ class IngredientModel {
     required this.unit,
     this.imageUrl,
     this.isConfirmedAvailable = false,
-  });
+    List<String>? dishNames,
+  }) : dishNames = dishNames ?? [];
 
   String get quantityLabel {
-    final q = quantityPerServe == quantityPerServe.roundToDouble() ? quantityPerServe.toInt().toString() : quantityPerServe.toString();
+    final q = quantityPerServe == quantityPerServe.roundToDouble()
+        ? quantityPerServe.toInt().toString()
+        : quantityPerServe.toString();
     return '$q $unit';
   }
+
+  /// "Paneer Masala, Dal" - shown on the card so the cook knows who needs what.
+  String get dishNamesLabel => dishNames.join(', ');
 
   static int _fallbackCounter = 0;
 
@@ -33,6 +46,9 @@ class IngredientModel {
       quantityPerServe: (json['quantityPerServe'] as num? ?? json['quantity'] as num? ?? 0).toDouble(),
       unit: (json['unit'] ?? 'pcs').toString(),
       imageUrl: json['imageUrl']?.toString(),
+      dishNames: (json['dishNames'] as List<dynamic>? ?? [])
+          .map((e) => e.toString())
+          .toList(),
     );
   }
 
@@ -41,5 +57,6 @@ class IngredientModel {
         'name': name,
         'quantityPerServe': quantityPerServe,
         'unit': unit,
+        'dishNames': dishNames,
       };
 }

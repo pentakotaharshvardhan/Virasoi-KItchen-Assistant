@@ -63,6 +63,27 @@ class RecipeService {
     };
   }
 
+  /// Generates every dish of a multi-dish meal in ONE backend call. The backend reuses
+  /// whatever is already in the DB and asks the AI only for the missing dishes, returning
+  /// one standalone recipe per dish (never a combined "combo" recipe).
+  Future<Result<List<RecipeModel>>> generateRecipesBatch({
+    required List<String> dishNames,
+    String? userId,
+  }) async {
+    final res = await _api.post(ApiConstants.generateRecipeBatch, body: {
+      'dishNames': dishNames,
+      if (userId != null && userId.isNotEmpty) 'userId': userId,
+    });
+    return switch (res) {
+      Success(data: final data) => Success(
+          ((data is List ? data : data['items'] ?? []) as List)
+              .map((e) => RecipeModel.fromJson(e as Map<String, dynamic>))
+              .toList(),
+        ),
+      Failure(message: final m) => Failure(m),
+    };
+  }
+
   Future<Result<RecipeModel>> findOrGenerateRecipe({
     required String dishName,
   }) async {

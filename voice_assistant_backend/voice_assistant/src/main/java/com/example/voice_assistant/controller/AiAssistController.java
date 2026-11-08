@@ -5,6 +5,7 @@ import com.example.voice_assistant.service.InstructionPersonalizationService;
 import com.example.voice_assistant.service.VoiceCommandService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -26,12 +27,11 @@ public class AiAssistController {
         this.instructionPersonalizationService = instructionPersonalizationService;
     }
 
-    /** Classifies a transcript into command + stove/dish/ingredient/timer parameters. Used
-     *  directly by the Ingredient screen (on-device STT -> POST here -> act on "REMOVE"
-     *  locally); the live-session websocket calls VoiceCommandService directly instead. */
+    /** Classifies a transcript into a command and validated parameters. Ingredient candidates
+     *  let REMOVE resolve to the exact names currently shown in the UI. */
     @PostMapping("/api/ai/command")
     public VoiceCommandResultDto classifyCommand(@Valid @RequestBody ClassifyCommandRequest request) {
-        return voiceCommandService.classify(request.transcript);
+        return voiceCommandService.classify(request.transcript, request.availableIngredientNames);
     }
 
     @PostMapping("/api/ai/personalize-instruction")
@@ -63,6 +63,9 @@ public class AiAssistController {
     public static class ClassifyCommandRequest {
         @NotBlank
         public String transcript;
+
+        @Size(max = 100)
+        public List<@NotBlank @Size(max = 120) String> availableIngredientNames = List.of();
     }
 
     public static class PersonalizeInstructionRequest {

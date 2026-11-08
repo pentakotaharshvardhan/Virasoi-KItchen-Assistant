@@ -4,13 +4,22 @@ package com.example.voice_assistant.entity.enums;
  * Classifies what resource a cooking step needs, which drives the
  * scheduling engine (see SchedulerService):
  *
- *  STOVE       - needs one of the limited stove resources (e.g. simmer, fry, boil)
- *  USER_ACTION - needs the user's hands/attention but no stove (e.g. chop, whisk, plate)
- *  PASSIVE     - needs neither the stove nor the user right now (e.g. "let dough rest",
- *                "marinate in the fridge") - it just runs in the background on a timer
+ *  STOVE          - needs a stove, but not the user's active attention
+ *  USER_ACTION    - needs the user's hands, but no stove
+ *  STOVE_AND_USER - needs both resources at the same time
+ *  PASSIVE        - needs neither resource right now
  */
 public enum StepType {
     STOVE,
     USER_ACTION,
-    PASSIVE
+    STOVE_AND_USER,
+    PASSIVE;
+
+    public boolean requiresStove() {
+        return this == STOVE || this == STOVE_AND_USER;
+    }
+
+    public boolean requiresUser() {
+        return this == USER_ACTION || this == STOVE_AND_USER;
+    }
 }

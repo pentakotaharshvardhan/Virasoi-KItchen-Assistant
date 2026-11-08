@@ -34,6 +34,15 @@ void main() {
     expect(vm.servings, 5);
   });
 
+  test('init clamps a saved stove count to the maximum', () async {
+    await storage.saveSettings(stoves: 5, servings: 2);
+    final vm = buildViewModel();
+
+    await vm.init();
+
+    expect(vm.stoves, CreateRecipeViewModel.maxStoves);
+  });
+
   test('init falls back to defaults when nothing is stored', () async {
     final vm = buildViewModel();
 
@@ -62,6 +71,17 @@ void main() {
     vm.addDish('Dal');
 
     expect(vm.suggestedDishName, '');
+  });
+
+  test('addDish rejects a fifth dish', () {
+    final vm = buildViewModel();
+    for (var i = 1; i <= CreateRecipeViewModel.maxDishes; i++) {
+      expect(vm.addDish('Dish $i'), isTrue);
+    }
+
+    expect(vm.addDish('Dish 5'), isFalse);
+    expect(vm.selectedDishes, hasLength(CreateRecipeViewModel.maxDishes));
+    expect(vm.errorMessage, 'You can add up to 4 dishes.');
   });
 
   test('removeDish removes only the requested chip', () {
@@ -127,12 +147,28 @@ void main() {
 
     expect(ok, isFalse);
     expect(vm.errorMessage, 'Please add at least one dish.');
-    expect(service.generateCalls, 0);
+    expect(service.batchCalls, 0);
   });
 
-  test('submit generates every dish separately and stores the settings',
+  test('submit rejects more than four stoves before generating recipes',
+      () async {
+    final vm = buildViewModel()..addDish('Paneer');
+
+    final ok = await vm.submit(stoveCount: 5, servingCount: 2);
+
+    expect(ok, isFalse);
+    expect(vm.errorMessage, 'Choose between 1 and 4 stoves.');
+    expect(service.batchCalls, 0);
+  });
+
+  test(
+      'submit generates the whole meal in one batch call and stores the settings',
       () async {
     await storage.saveSession(accessToken: 'jwt', userId: 'user-42');
+    service.batchResult = Success([
+      sampleRecipe(id: 'r-1', dishName: 'Paneer'),
+      sampleRecipe(id: 'r-2', dishName: 'Naan'),
+    ]);
     final vm = buildViewModel();
     vm.addDish('Paneer');
     vm.addDish('Naan');
@@ -144,16 +180,20 @@ void main() {
 
     expect(ok, isTrue);
     expect(vm.isSubmitting, isFalse);
-    expect(service.generatedDishNames, ['Paneer', 'Naan']);
-    expect(service.lastGenerateUserId, 'user-42');
+    expect(service.batchCalls, 1, reason: 'one request for the whole meal');
+    expect(service.batchDishNames, [
+      ['Paneer', 'Naan']
+    ]);
+    expect(service.batchUserIds, ['user-42']);
     expect(vm.generated, hasLength(2));
+    expect(vm.generated.map((r) => r.dishName), ['Paneer', 'Naan']);
     expect(await storage.stoveCount, 2);
     expect(await storage.servingCount, 4);
   });
 
   test('submit failure restores the submitting flag and records the error',
       () async {
-    service.generateResult = const Failure('AI quota exhausted');
+    service.batchResult = const Failure('AI quota exhausted');
     final vm = buildViewModel();
     vm.addDish('Paneer');
 
@@ -165,9 +205,9 @@ void main() {
     expect(vm.generated, isEmpty);
   });
 
-  test('submit failure identifies the dish that could not be generated',
+  test('submit failure names the batch when several dishes were requested',
       () async {
-    service.generateResult = const Failure('AI quota exhausted');
+    service.batchResult = const Failure('AI quota exhausted');
     final vm = buildViewModel();
     vm.addDish('Paneer');
     vm.addDish('Naan');
@@ -175,19 +215,22 @@ void main() {
     final ok = await vm.submit(stoveCount: 1, servingCount: 2);
 
     expect(ok, isFalse);
-    expect(service.generatedDishNames, ['Paneer']);
-    expect(vm.errorMessage, 'Could not generate "Paneer": AI quota exhausted');
+    expect(service.batchDishNames, [
+      ['Paneer', 'Naan']
+    ]);
+    expect(
+        vm.errorMessage, 'Could not generate the recipes: AI quota exhausted');
     expect(vm.generated, isEmpty);
     expect(vm.isSubmitting, isFalse);
   });
 
   test('submit clears a previous error on retry', () async {
-    service.generateResult = const Failure('temporary');
+    service.batchResult = const Failure('temporary');
     final vm = buildViewModel();
     vm.addDish('Paneer');
     await vm.submit(stoveCount: 1, servingCount: 2);
 
-    service.generateResult = Success(sampleRecipe());
+    service.batchResult = Success([sampleRecipe()]);
     final ok = await vm.submit(stoveCount: 1, servingCount: 2);
 
     expect(ok, isTrue);

@@ -1,6 +1,7 @@
 import 'package:ai_assistant_frontend/core/utils/result.dart';
 import 'package:ai_assistant_frontend/core/utils/secure_storage.dart';
 import 'package:ai_assistant_frontend/models/chat_message_model.dart';
+import 'package:ai_assistant_frontend/services/ai_service.dart';
 import 'package:ai_assistant_frontend/services/voice_service.dart';
 import 'package:ai_assistant_frontend/view_models/voice_viewmodel.dart';
 import 'package:fake_async/fake_async.dart';
@@ -64,7 +65,8 @@ void main() {
   });
 
   group('speech to text', () {
-    test('partial results update the live transcript without sending', () async {
+    test('partial results update the live transcript without sending',
+        () async {
       final vm = buildViewModel();
       await vm.init('s');
 
@@ -75,7 +77,8 @@ void main() {
       expect(vm.state, VoiceState.listening);
     });
 
-    test('a final result is sent over the socket and becomes a user message', () async {
+    test('a final result is sent over the socket and becomes a user message',
+        () async {
       final vm = buildViewModel();
       await vm.init('s');
 
@@ -91,6 +94,30 @@ void main() {
       expect(vm.transcript.single.text, 'remove onion');
       expect(vm.transcript.single.sender, ChatSender.user);
       expect(vm.state, VoiceState.thinking);
+    });
+
+    test('sends the unified REST command result to the session handler',
+        () async {
+      ai.commandResult = Success(VoiceCommandResult(
+        command: 'REMOVE',
+        ingredientName: 'Paneer',
+        ingredientNames: const ['Paneer'],
+      ));
+      final vm = buildViewModel();
+      vm.onAvailableIngredients = () async => ['Paneer', 'Tomato'];
+      await vm.init('sess-1');
+
+      voice.emitResult('remove panner', isFinal: true);
+      await flush();
+
+      final payload = ws.sent.single as Map<String, dynamic>;
+      expect(payload['type'], 'command_result');
+      expect(payload['text'], 'remove panner');
+      expect(
+        (payload['result'] as Map<String, dynamic>)['ingredientNames'],
+        ['Paneer'],
+      );
+      expect(ai.ingredientCandidates.single, ['Paneer', 'Tomato']);
     });
 
     test('sends after 20 seconds of unchanged partial text', () {
