@@ -283,6 +283,32 @@ void main() {
     expect(vm.pending.map((item) => item.name), ['Tomato']);
   });
 
+  test('ingredient matching ignores case and singular/plural differences',
+      () async {
+    ingredientService.result = Success(recipeWithIngredients([
+      IngredientModel.fromJson(ingredientJson(id: 'i3', name: 'Tomatoes')),
+    ]));
+    final vm = await loaded();
+
+    vm.markConfirmedByNames(['tOMATOES']);
+
+    expect(vm.pending, isEmpty);
+    expect(vm.confirmed.single.name, 'Tomatoes');
+  });
+
+  test('ingredient matching tolerates a short spelling error case-insensitively',
+      () async {
+    ingredientService.result = Success(recipeWithIngredients([
+      IngredientModel.fromJson(ingredientJson(id: 'i3', name: 'Tomatoes')),
+    ]));
+    final vm = await loaded();
+
+    vm.markConfirmedByNames(['TaMtOeS']);
+
+    expect(vm.pending, isEmpty);
+    expect(vm.confirmed.single.name, 'Tomatoes');
+  });
+
   test('an ambiguous spelling does not remove a checklist item', () async {
     ingredientService.result = Success(recipeWithIngredients([
       IngredientModel.fromJson(ingredientJson(id: 'i3', name: 'Cheesy Paneer')),

@@ -30,4 +30,12 @@ class SessionService {
       Failure(message: final m) => Failure(m),
     };
   }
+
+  Future<Result<void>> cancelSession(String sessionId) async {
+    final res = await _api.post(ApiConstants.sessionCancel(sessionId));
+    return switch (res) {
+      Success() => const Success(null),
+      Failure(message: final m) => Failure(m),
+    };
+  }
 }

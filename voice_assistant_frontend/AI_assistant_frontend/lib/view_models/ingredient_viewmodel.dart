@@ -339,7 +339,14 @@ class IngredientViewModel extends ChangeNotifier {
       int? bestDistance;
       for (final itemWord in itemWords) {
         final distance = _editDistance(queryWord, itemWord);
-        final maxDistance = queryWord.length >= 8 ? 2 : 1;
+        final longerLength = queryWord.length > itemWord.length
+            ? queryWord.length
+            : itemWord.length;
+        final maxDistance =
+            longerLength >= 5 &&
+                    (queryWord.length - itemWord.length).abs() == 1
+                ? 2
+                : 1;
         if ((queryWord.length < 4 && queryWord != itemWord) ||
             distance > maxDistance) {
           continue;

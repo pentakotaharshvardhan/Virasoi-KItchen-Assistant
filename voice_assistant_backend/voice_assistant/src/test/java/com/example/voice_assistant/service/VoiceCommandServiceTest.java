@@ -21,7 +21,8 @@ class VoiceCommandServiceTest {
 
     @Test
     void removeReturnsOnlyCanonicalChecklistNamesForMultipleMisspellings() throws Exception {
-        VoiceCommandService service = serviceFor(modelResult("REMOVE", List.of("panner"), null));
+        VoiceCommandService service = serviceFor(
+                modelResult("REMOVE", List.of("panner", "onions"), null));
 
         VoiceCommandResultDto result = service.classify(
                 "remove panner and onions", List.of("Paneer", "Onions", "Tomato"));
@@ -29,6 +30,29 @@ class VoiceCommandServiceTest {
         assertEquals("REMOVE", result.command);
         assertEquals(List.of("Paneer", "Onions"), result.ingredientNames);
         assertEquals("Paneer", result.ingredientName);
+    }
+
+    @Test
+    void removePrefersGeminisCanonicalNameOverNoisyTranscriptSpelling() throws Exception {
+        VoiceCommandService service = serviceFor(
+                modelResult("REMOVE", List.of("Tomatoes"), null));
+
+        VoiceCommandResultDto result = service.classify(
+                "remove tamtoes", List.of("Tomatoes", "Potatoes"));
+
+        assertEquals(List.of("Tomatoes"), result.ingredientNames);
+    }
+
+    @Test
+    void removeMatchesCaseAndAOneCharacterLengthMisspelling() throws Exception {
+        VoiceCommandService service = serviceFor(
+                modelResult("REMOVE", List.of("tAMATOES"), null));
+
+        VoiceCommandResultDto result = service.classify(
+                "remove tamatoes", List.of("Tomatoes"));
+
+        assertEquals(List.of("Tomatoes"), result.ingredientNames);
+        assertEquals("Tomatoes", result.ingredientName);
     }
 
     @Test

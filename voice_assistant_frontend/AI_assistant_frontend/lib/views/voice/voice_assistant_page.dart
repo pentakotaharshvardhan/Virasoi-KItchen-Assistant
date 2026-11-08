@@ -7,6 +7,7 @@ import '../../core/utils/result.dart';
 import '../../models/chat_message_model.dart';
 import '../../models/recipe_model.dart';
 import '../../models/recipe_step_model.dart';
+import '../../services/session_service.dart';
 import '../../services/voice_service.dart';
 import '../../view_models/ingredient_viewmodel.dart';
 import '../../view_models/voice_viewmodel.dart';
@@ -40,6 +41,7 @@ class _VoiceAssistantPageState extends State<VoiceAssistantPage>
   IngredientViewModel? _ing;
 
   bool _showSteps = false;
+  bool _isCancellingSession = false;
   List<RecipeStepModel> _steps = [];
   bool _stepsLoading = false;
 
@@ -133,6 +135,52 @@ class _VoiceAssistantPageState extends State<VoiceAssistantPage>
     _vm.sendTypedText(text);
   }
 
+  Future<void> _confirmCancelSession() async {
+    final sessionId = widget.sessionId;
+    if (sessionId == null || widget.helpMode || _isCancellingSession) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('End cooking session?'),
+        content: const Text(
+          'This will stop the session and clear its active timers and resource reservations.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Keep cooking'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('End session'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _isCancellingSession = true);
+    await _vm.pause();
+    final result = await SessionService().cancelSession(sessionId);
+    if (!mounted) return;
+
+    switch (result) {
+      case Success():
+        await _vm.detach();
+        if (mounted) Navigator.of(context).pop();
+        break;
+      case Failure(message: final message):
+        setState(() => _isCancellingSession = false);
+        await _vm.startListening();
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not end the session: $message')),
+        );
+        break;
+    }
+  }
+
   void _toggleMic() {
     if (_vm.state == VoiceState.listening) {
       _vm.stopListening();
@@ -154,6 +202,14 @@ class _VoiceAssistantPageState extends State<VoiceAssistantPage>
       appBar: AppBar(
         title: Text(widget.helpMode ? 'Helper Assistant' : 'Cooking Assistant'),
         actions: [
+          if (!widget.helpMode)
+            if (widget.sessionId != null)
+              IconButton(
+                icon: const Icon(Icons.stop_circle_outlined),
+                tooltip: 'End cooking session',
+                onPressed:
+                    _isCancellingSession ? null : _confirmCancelSession,
+              ),
           if (!widget.helpMode)
             IconButton(
               icon: Icon(

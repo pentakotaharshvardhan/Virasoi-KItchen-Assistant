@@ -173,9 +173,11 @@ public class VoiceCommandService {
             - STOP: user wants to end/pause the session.
             - REMOVE: user wants ingredient(s) taken off their checklist (Ingredient screen only) - if they name
               more than one item ("remove onions and tomatoes"), put EVERY item into ingredientNames as a JSON
-              array of strings, and also put the first one into ingredientName. When checklist candidates
-              are supplied below, return only requested candidates using their exact canonical spelling;
-              do not return every candidate and do not guess when the match is ambiguous.
+              array of strings, and also put the first one into ingredientName. Treat the checklist candidates
+              as the authoritative names: correct noisy or misspelled speech by selecting the closest clearly
+              intended candidate and return its exact spelling and casing. Match without regard to case or
+              singular/plural form. Return only items the user requested; never return the whole checklist,
+              invent an item, or choose when the candidates are genuinely ambiguous.
             - REMAINING_ITEMS: user is asking what is still left / what items are still needed on the
               ingredient checklist (Ingredient screen only), e.g. "tell me the remaining items",
               "what's left on the list". ingredientName/ingredientNames stay null.
@@ -348,14 +350,15 @@ public class VoiceCommandService {
         result.stoveIndex = stoveIndices.stream().findFirst().orElse(null);
 
         if (Command.REMOVE.name().equals(result.command)) {
-            VoiceCommandResultDto ruleBased = ruleBasedClassify(transcript);
-            List<String> requested = ruleBased != null
-                    && Command.REMOVE.name().equals(ruleBased.command)
-                    && ruleBased.ingredientNames != null
-                    ? ruleBased.ingredientNames
-                    : result.ingredientNames;
-            if ((requested == null || requested.isEmpty()) && result.ingredientName != null) {
-                requested = List.of(result.ingredientName);
+            List<String> requested = cleanCandidates(result.ingredientNames);
+            if (requested.isEmpty() && result.ingredientName != null) {
+                requested = cleanCandidates(List.of(result.ingredientName));
+            }
+            if (requested.isEmpty()) {
+                VoiceCommandResultDto ruleBased = ruleBasedClassify(transcript);
+                if (ruleBased != null && Command.REMOVE.name().equals(ruleBased.command)) {
+                    requested = cleanCandidates(ruleBased.ingredientNames);
+                }
             }
             result.ingredientNames = candidates.isEmpty()
                     ? cleanCandidates(requested)
@@ -413,7 +416,10 @@ public class VoiceCommandService {
             int bestDistance = Integer.MAX_VALUE;
             for (String candidateWord : candidateWords) {
                 int distance = editDistance(queryWord, candidateWord);
-                int allowedDistance = queryWord.length() >= 8 ? 2 : 1;
+                int allowedDistance = Math.max(queryWord.length(), candidateWord.length()) >= 5
+                        && Math.abs(queryWord.length() - candidateWord.length()) == 1
+                        ? 2
+                        : 1;
                 if (queryWord.length() < 4 && !queryWord.equals(candidateWord)) continue;
                 if (distance <= allowedDistance) bestDistance = Math.min(bestDistance, distance);
             }
