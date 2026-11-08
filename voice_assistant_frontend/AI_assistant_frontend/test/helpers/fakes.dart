@@ -23,6 +23,7 @@ class FakeWebSocket extends AppWebSocketService {
   FakeWebSocket() : super(url: 'wss://test.local/ws');
 
   final _controller = StreamController<Map<String, dynamic>>.broadcast();
+  final _connController = StreamController<bool>.broadcast();
   final List<dynamic> sent = [];
   int connectCalls = 0;
   int closeCalls = 0;
@@ -33,9 +34,15 @@ class FakeWebSocket extends AppWebSocketService {
   Stream<Map<String, dynamic>> get messages => _controller.stream;
 
   @override
+  Stream<bool> get connectionState => _connController.stream;
+
+  @override
   void connect() {
     connectCalls++;
     connected = true;
+    // Tests reuse one fake across several init() calls, so the controller may already be
+    // closed by a previous dispose(); the real service always builds a fresh instance.
+    if (!_connController.isClosed) _connController.add(true);
   }
 
   @override
@@ -54,9 +61,14 @@ class FakeWebSocket extends AppWebSocketService {
     disposeCalls++;
     close();
     _controller.close();
+    _connController.close();
   }
 
   void emit(Map<String, dynamic> message) => _controller.add(message);
+
+  /// Mimics the real service announcing a successful (re)connect, so a view model can reset
+  /// its last-seen sequence number the way it must after a dropped socket.
+  void emitConnected({bool value = true}) => _connController.add(value);
 }
 
 class FakeVoiceEngine implements VoiceEngine {
@@ -72,8 +84,13 @@ class FakeVoiceEngine implements VoiceEngine {
   int initTtsCalls = 0;
   int micPermissionCalls = 0;
 
+  /// Records `(code, permanent)` failures reported by the engine so tests can assert the
+  /// view model backs off instead of hot-restarting.
+  final List<String> errors = [];
+
   void Function(String text, bool isFinal)? onResult;
   void Function(String status)? onStatus;
+  void Function(String code, bool permanent)? onError;
 
   @override
   Future<bool> requestMicPermission() async {
@@ -82,9 +99,18 @@ class FakeVoiceEngine implements VoiceEngine {
   }
 
   @override
-  Future<bool> initSpeech({void Function(String status)? onStatus}) async {
+  Future<bool> initSpeech({
+    void Function(String status)? onStatus,
+    void Function(String code, bool permanent)? onError,
+  }) async {
     this.onStatus = onStatus;
+    this.onError = onError;
     return sttReady;
+  }
+
+  void emitError(String code, {bool permanent = true}) {
+    errors.add(code);
+    onError?.call(code, permanent);
   }
 
   @override

@@ -2,6 +2,10 @@ spring:
   application:
     name: voice_assistant
 
+  flyway:
+    baseline-on-migrate: true
+    baseline-version: 0
+
   spring:
     datasource:
       url: ${SPRING_DATASOURCE_URL}
@@ -40,7 +44,9 @@ ai:
   base-url: https://generativelanguage.googleapis.com/v1beta
   api-key: ${AI_API_KEY}
   model: gemini-3.1-flash-lite
-  timeout-seconds: 60
+  # Interactive commands must fail over to the deterministic classifier quickly instead of
+  # leaving the assistant "thinking" for a whole minute.
+  timeout-seconds: 10
 
 # ---------------------------------------------------------------------------
 # Speech-to-text: Google Cloud Speech-to-Text v1 REST API, authenticated with
@@ -73,7 +79,10 @@ tts:
   language-code: hi-IN
   voice-name: hi-IN-Standard-A
   audio-encoding: MP3
-  timeout-seconds: 30
+  # Bounded on purpose: synthesis runs inline while the socket/scheduler thread is pushing a
+  # frame, so a slow or unauthenticated call must not hold the whole response up for 30s.
+  # A null audio result simply falls back to on-device speech, which is instant.
+  timeout-seconds: 5
 
 # ---------------------------------------------------------------------------
 # Kitchen-assistant tuning knobs

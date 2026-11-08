@@ -128,4 +128,35 @@ void main() {
 
     await finish(tester);
   });
+
+  testWidgets('says so when the connection to the kitchen drops', (tester) async {
+    await start(tester);
+    expect(find.text('Connection lost - reconnecting...'), findsNothing);
+
+    ws.emitConnected(value: false);
+    await tester.pump();
+
+    expect(find.text('Connection lost - reconnecting...'), findsOneWidget);
+    expect(find.byIcon(Icons.wifi_off_rounded), findsOneWidget);
+
+    ws.emitConnected();
+    await tester.pump();
+
+    expect(find.text('Connection lost - reconnecting...'), findsNothing);
+
+    await finish(tester);
+  });
+
+  testWidgets('tells the user when the microphone permission is denied',
+      (tester) async {
+    voice.permissionGranted = false;
+
+    await start(tester);
+
+    expect(find.textContaining('Microphone access is off'), findsOneWidget);
+    // The input row stays, so typing is an obvious fallback.
+    expect(find.byType(TextField), findsOneWidget);
+
+    await finish(tester);
+  });
 }

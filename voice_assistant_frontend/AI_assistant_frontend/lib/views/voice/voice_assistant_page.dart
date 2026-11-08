@@ -196,6 +196,51 @@ class _VoiceAssistantPageState extends State<VoiceAssistantPage>
         VoiceState.speaking => 'Speaking...',
       };
 
+  /// Connection / permission banner above the conversation (help mode never has a session
+  /// socket to lose, so it only reports a denied microphone there too).
+  Widget _buildNoticeBanner() {
+    if (!widget.helpMode && !_vm.wsConnected) {
+      return _noticeBanner(
+          Icons.wifi_off_rounded, 'Connection lost - reconnecting...', AppColors.error);
+    }
+    if (_vm.micPermissionDenied) {
+      return _noticeBanner(
+          Icons.mic_off_rounded,
+          'Microphone access is off - enable it in settings to talk, or type your command below.',
+          AppColors.warning);
+    }
+    return const SizedBox.shrink();
+  }
+
+  Widget _noticeBanner(IconData icon, String text, Color color) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withValues(alpha: 0.40)),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, size: 16, color: color),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              text,
+              style: TextStyle(
+                color: color,
+                fontSize: 12.5,
+                height: 1.3,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -242,6 +287,10 @@ class _VoiceAssistantPageState extends State<VoiceAssistantPage>
                     ? _buildStepsPanel()
                     : const SizedBox(width: double.infinity),
               ),
+
+              // Connection / microphone notices, so a dead socket or a denied permission
+              // never looks like the assistant is simply ignoring the user.
+              _buildNoticeBanner(),
 
               // Conversation.
               Expanded(child: _buildChatList()),

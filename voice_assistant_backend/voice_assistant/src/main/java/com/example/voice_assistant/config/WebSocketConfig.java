@@ -3,6 +3,7 @@ package com.example.voice_assistant.config;
 import com.example.voice_assistant.security.JwtHandshakeInterceptor;
 import com.example.voice_assistant.service.VoiceCommandService;
 import com.example.voice_assistant.security.JwtService;
+import com.example.voice_assistant.repository.SessionDishStepRepository;
 import com.example.voice_assistant.service.CookingSessionService;
 import com.example.voice_assistant.service.RecipeService;
 import com.example.voice_assistant.service.SchedulerService;
@@ -30,12 +31,14 @@ public class WebSocketConfig implements WebSocketConfigurer {
     private final JwtService jwtService;
 
     private final VoiceCommandService voiceCommandService;
+    private final SessionDishStepRepository sessionDishStepRepository;
 
     public WebSocketConfig(SpeechToTextService speechToTextService, TextToSpeechService textToSpeechService,
                            RecipeService recipeService, CookingSessionService cookingSessionService,
                            SchedulerService schedulerService, WebSocketSessionRegistry registry,
                            ObjectMapper objectMapper, JwtService jwtService,
-                           VoiceCommandService voiceCommandService) { // ADD param
+                           VoiceCommandService voiceCommandService,
+                           SessionDishStepRepository sessionDishStepRepository) { // ADD param
         this.speechToTextService = speechToTextService;
         this.textToSpeechService = textToSpeechService;
         this.recipeService = recipeService;
@@ -45,11 +48,13 @@ public class WebSocketConfig implements WebSocketConfigurer {
         this.objectMapper = objectMapper;
         this.jwtService = jwtService;
         this.voiceCommandService = voiceCommandService; // ADD
+        this.sessionDishStepRepository = sessionDishStepRepository;
     }
 
     private AudioStreamWebSocketHandler audioStreamWebSocketHandler() {
         return new AudioStreamWebSocketHandler(speechToTextService, textToSpeechService, recipeService,
-                cookingSessionService, schedulerService, registry, objectMapper, voiceCommandService); // ADD arg
+                cookingSessionService, schedulerService, registry, objectMapper, voiceCommandService,
+                sessionDishStepRepository); // ADD arg
     }
 
     @Override

@@ -77,80 +77,88 @@ void main() {
       expect(vm.state, VoiceState.listening);
     });
 
-    test('a final result is sent over the socket and becomes a user message',
-        () async {
-      final vm = buildViewModel();
-      await vm.init('s');
+    test('a final result is sent after the 12-second listening window', () {
+      fakeAsync((async) {
+        final vm = buildViewModel();
+        vm.init('s');
+        async.flushMicrotasks();
 
-      voice.emitResult('remove onion', isFinal: true);
-      await flush();
+        voice.emitResult('remove onion', isFinal: true);
+        async.flushMicrotasks();
+        expect(ws.sent, isEmpty);
 
-      final payload = ws.sent.single as Map<String, dynamic>;
-      expect(payload['type'], 'user_text');
-      expect(payload['sessionId'], 's');
-      expect(payload['text'], 'remove onion');
-      expect(payload['transcript'], 'remove onion');
-      expect(vm.liveTranscript, '');
-      expect(vm.transcript.single.text, 'remove onion');
-      expect(vm.transcript.single.sender, ChatSender.user);
-      expect(vm.state, VoiceState.thinking);
+        async.elapse(const Duration(seconds: 12));
+        async.flushMicrotasks();
+
+        final payload = ws.sent.single as Map<String, dynamic>;
+        expect(payload['type'], 'user_text');
+        expect(payload['sessionId'], 's');
+        expect(payload['text'], 'remove onion');
+        expect(payload['transcript'], 'remove onion');
+        expect(vm.liveTranscript, '');
+        expect(vm.transcript.single.text, 'remove onion');
+        expect(vm.transcript.single.sender, ChatSender.user);
+        expect(vm.state, VoiceState.thinking);
+      });
     });
 
     test('sends the unified REST command result to the session handler',
-        () async {
-      ai.commandResult = Success(VoiceCommandResult(
-        command: 'REMOVE',
-        ingredientName: 'Paneer',
-        ingredientNames: const ['Paneer'],
-      ));
-      final vm = buildViewModel();
-      vm.onAvailableIngredients = () async => ['Paneer', 'Tomato'];
-      await vm.init('sess-1');
+        () {
+      fakeAsync((async) {
+        ai.commandResult = Success(VoiceCommandResult(
+          command: 'REMOVE',
+          ingredientName: 'Paneer',
+          ingredientNames: const ['Paneer'],
+        ));
+        final vm = buildViewModel();
+        vm.onAvailableIngredients = () async => ['Paneer', 'Tomato'];
+        vm.init('sess-1');
+        async.flushMicrotasks();
 
-      voice.emitResult('remove panner', isFinal: true);
-      await flush();
+        voice.emitResult('remove panner', isFinal: true);
+        async.elapse(const Duration(seconds: 12));
+        async.flushMicrotasks();
 
-      final payload = ws.sent.single as Map<String, dynamic>;
-      expect(payload['type'], 'command_result');
-      expect(payload['text'], 'remove panner');
-      expect(
-        (payload['result'] as Map<String, dynamic>)['ingredientNames'],
-        ['Paneer'],
-      );
-      expect(ai.ingredientCandidates.single, ['Paneer', 'Tomato']);
+        final payload = ws.sent.single as Map<String, dynamic>;
+        expect(payload['type'], 'command_result');
+        expect(payload['text'], 'remove panner');
+        expect(
+          (payload['result'] as Map<String, dynamic>)['ingredientNames'],
+          ['Paneer'],
+        );
+        expect(ai.ingredientCandidates.single, ['Paneer', 'Tomato']);
+      });
     });
 
-    test('sends after 20 seconds of unchanged partial text', () {
+    test('submits non-empty transcript after 12 seconds', () {
       fakeAsync((async) {
         final vm = buildViewModel();
         vm.init('s');
         async.flushMicrotasks();
 
         voice.emitResult('I have onions');
-        async.elapse(const Duration(seconds: 19));
+        async.elapse(const Duration(seconds: 11));
         expect(ws.sent, isEmpty);
 
-        async.elapse(const Duration(seconds: 2));
+        async.elapse(const Duration(seconds: 1));
         async.flushMicrotasks();
         expect(ws.sent, hasLength(1));
       });
     });
 
-    test('changing the partial text restarts the 20 second window', () {
+    test('restarts a fresh 12-second window when no text was recognized', () {
       fakeAsync((async) {
         final vm = buildViewModel();
         vm.init('s');
         async.flushMicrotasks();
 
-        voice.emitResult('I have');
-        async.elapse(const Duration(seconds: 5));
-        voice.emitResult('I have onions');
-        async.elapse(const Duration(seconds: 19));
-        expect(ws.sent, isEmpty);
-
-        async.elapse(const Duration(seconds: 2));
+        final startsBefore = voice.startCalls;
+        async.elapse(const Duration(seconds: 12));
         async.flushMicrotasks();
-        expect(ws.sent, hasLength(1));
+
+        expect(ws.sent, isEmpty);
+        expect(voice.startCalls, startsBefore + 1);
+        expect(vm.state, VoiceState.listening);
       });
     });
 
@@ -164,6 +172,7 @@ void main() {
         voice.emitResult('remove onions');
         voice.emitResult('and tomatoes', isFinal: true);
 
+        async.elapse(const Duration(seconds: 12));
         async.flushMicrotasks();
         final payload = ws.sent.single as Map<String, dynamic>;
         expect(payload['text'], 'remove onions and tomatoes');
@@ -210,32 +219,38 @@ void main() {
   });
 
   group('help mode', () {
-    test('asks the REST help endpoint instead of the socket', () async {
-      ai.helpResult = const Success('Say "remove onion" to clear it.');
-      final vm = buildViewModel();
-      await vm.init('s', helpMode: true);
+    test('asks the REST help endpoint instead of the socket', () {
+      fakeAsync((async) {
+        ai.helpResult = const Success('Say "remove onion" to clear it.');
+        final vm = buildViewModel();
+        vm.init('s', helpMode: true);
+        async.flushMicrotasks();
 
-      voice.emitResult('how do I remove onions', isFinal: true);
-      await flush();
-      await flush();
+        voice.emitResult('how do I remove onions', isFinal: true);
+        async.elapse(const Duration(seconds: 12));
+        async.flushMicrotasks();
 
-      expect(ai.helpQuestions, ['how do I remove onions']);
-      expect(ws.sent, isEmpty);
-      expect(vm.transcript.last.sender, ChatSender.assistant);
-      expect(vm.transcript.last.text, 'Say "remove onion" to clear it.');
-      expect(voice.spoken, contains('Say "remove onion" to clear it.'));
+        expect(ai.helpQuestions, ['how do I remove onions']);
+        expect(ws.sent, isEmpty);
+        expect(vm.transcript.last.sender, ChatSender.assistant);
+        expect(vm.transcript.last.text, 'Say "remove onion" to clear it.');
+        expect(voice.spoken, contains('Say "remove onion" to clear it.'));
+      });
     });
 
-    test('speaks the help failure message', () async {
-      ai.helpResult = const Failure('AI is down');
-      final vm = buildViewModel();
-      await vm.init('s', helpMode: true);
+    test('speaks the help failure message', () {
+      fakeAsync((async) {
+        ai.helpResult = const Failure('AI is down');
+        final vm = buildViewModel();
+        vm.init('s', helpMode: true);
+        async.flushMicrotasks();
 
-      voice.emitResult('help me', isFinal: true);
-      await flush();
-      await flush();
+        voice.emitResult('help me', isFinal: true);
+        async.elapse(const Duration(seconds: 12));
+        async.flushMicrotasks();
 
-      expect(vm.transcript.last.text, 'AI is down');
+        expect(vm.transcript.last.text, 'AI is down');
+      });
     });
   });
 
@@ -428,7 +443,7 @@ void main() {
   });
 
   group('lifecycle', () {
-    test('stopListening cancels the pending stability send', () {
+    test('stopListening cancels the 12-second listen window', () {
       fakeAsync((async) {
         final vm = buildViewModel();
         vm.init('s');
@@ -438,7 +453,7 @@ void main() {
         async.elapse(const Duration(seconds: 2));
         vm.stopListening();
         async.flushMicrotasks();
-        async.elapse(const Duration(seconds: 20));
+        async.elapse(const Duration(seconds: 12));
         async.flushMicrotasks();
 
         expect(ws.sent, isEmpty);
@@ -458,64 +473,74 @@ void main() {
   });
 
   group('ready check', () {
-    test('"yes" fires the onReady callback and stops asking', () async {
-      final vm = buildViewModel();
-      await vm.init('s');
-      var readyCalls = 0;
-      await vm.beginReadyCheck(onReady: () async {
-        readyCalls++;
+    test('"yes" fires the onReady callback and stops asking', () {
+      fakeAsync((async) {
+        final vm = buildViewModel();
+        vm.init('s');
+        async.flushMicrotasks();
+        var readyCalls = 0;
+        vm.beginReadyCheck(onReady: () async {
+          readyCalls++;
+        });
+        async.flushMicrotasks();
+
+        expect(vm.readyCheckActive, isTrue);
+        expect(voice.spoken.last, contains('ready to start cooking'));
+
+        // Let the announcement finish and the mic come back before answering.
+        async.flushMicrotasks();
+        voice.emitResult('yes', isFinal: true);
+        async.elapse(const Duration(seconds: 12));
+        async.flushMicrotasks();
+
+        expect(readyCalls, 1);
+        expect(vm.readyCheckActive, isFalse);
+        expect(ws.sent, isEmpty, reason: 'the answer must never hit the backend');
       });
-
-      expect(vm.readyCheckActive, isTrue);
-      expect(voice.spoken.last, contains('ready to start cooking'));
-
-      // Let the announcement finish and the mic come back before answering.
-      await flush();
-      voice.emitResult('yes', isFinal: true);
-      await flush();
-      await flush();
-
-      expect(readyCalls, 1);
-      expect(vm.readyCheckActive, isFalse);
-      expect(ws.sent, isEmpty, reason: 'the answer must never hit the backend');
     });
 
-    test('"not yet" keeps the question open', () async {
-      final vm = buildViewModel();
-      await vm.init('s');
-      var readyCalls = 0;
-      await vm.beginReadyCheck(onReady: () async {
-        readyCalls++;
+    test('"not yet" keeps the question open', () {
+      fakeAsync((async) {
+        final vm = buildViewModel();
+        vm.init('s');
+        async.flushMicrotasks();
+        var readyCalls = 0;
+        vm.beginReadyCheck(onReady: () async {
+          readyCalls++;
+        });
+        async.flushMicrotasks();
+
+        voice.emitResult('not yet', isFinal: true);
+        async.elapse(const Duration(seconds: 12));
+        async.flushMicrotasks();
+
+        expect(readyCalls, 0);
+        expect(vm.readyCheckActive, isTrue);
+        expect(voice.spoken.last, contains('take your time'));
+        expect(ws.sent, isEmpty);
       });
-
-      await flush();
-      voice.emitResult('not yet', isFinal: true);
-      await flush();
-      await flush();
-
-      expect(readyCalls, 0);
-      expect(vm.readyCheckActive, isTrue);
-      expect(voice.spoken.last, contains('take your time'));
-      expect(ws.sent, isEmpty);
     });
 
-    test('an unclear answer re-asks the question', () async {
-      final vm = buildViewModel();
-      await vm.init('s');
-      var readyCalls = 0;
-      await vm.beginReadyCheck(onReady: () async {
-        readyCalls++;
+    test('an unclear answer re-asks the question', () {
+      fakeAsync((async) {
+        final vm = buildViewModel();
+        vm.init('s');
+        async.flushMicrotasks();
+        var readyCalls = 0;
+        vm.beginReadyCheck(onReady: () async {
+          readyCalls++;
+        });
+        async.flushMicrotasks();
+
+        voice.emitResult('hmm', isFinal: true);
+        async.elapse(const Duration(seconds: 12));
+        async.flushMicrotasks();
+
+        expect(readyCalls, 0);
+        expect(vm.readyCheckActive, isTrue);
+        expect(voice.spoken.last, contains('yes or no'));
+        expect(ws.sent, isEmpty);
       });
-
-      await flush();
-      voice.emitResult('hmm', isFinal: true);
-      await flush();
-      await flush();
-
-      expect(readyCalls, 0);
-      expect(vm.readyCheckActive, isTrue);
-      expect(voice.spoken.last, contains('yes or no'));
-      expect(ws.sent, isEmpty);
     });
   });
 
@@ -617,13 +642,13 @@ void main() {
       final vm = buildViewModel();
       await vm.init('s');
 
-      vm.sendTypedText('  next  ');
+      vm.sendTypedText('  remove the onions  ');
       await flush();
 
       final payload = ws.sent.single as Map<String, dynamic>;
       expect(payload['type'], 'user_text');
-      expect(payload['text'], 'next');
-      expect(vm.transcript.single.text, 'next');
+      expect(payload['text'], 'remove the onions');
+      expect(vm.transcript.single.text, 'remove the onions');
       expect(vm.transcript.single.sender, ChatSender.user);
     });
 
@@ -635,6 +660,354 @@ void main() {
 
       expect(ws.sent, isEmpty);
       expect(vm.transcript, isEmpty);
+    });
+  });
+
+  group('keyword fast path', () {
+    test('a bare control word skips the classifier entirely', () async {
+      final vm = buildViewModel();
+      await vm.init('s');
+
+      vm.sendTypedText('  next.  ');
+      await flush();
+
+      final payload = ws.sent.single as Map<String, dynamic>;
+      expect(payload['type'], 'command_result');
+      expect(payload['text'], 'next.');
+      expect(payload['result'], containsPair('command', 'NEXT'));
+      expect(ai.classifiedTranscripts, isEmpty,
+          reason: 'no classification round trip');
+    });
+
+    test('every control phrase maps to its backend command', () async {
+      final vm = buildViewModel();
+      await vm.init('s');
+
+      const expected = {
+        'done': 'NEXT',
+        'wait': 'WAIT',
+        'say that again': 'REPEAT',
+        'stop': 'STOP',
+        'help': 'HELP',
+      };
+      for (final entry in expected.entries) {
+        ws.sent.clear();
+        vm.sendTypedText(entry.key);
+        await flush();
+
+        final payload = ws.sent.single as Map<String, dynamic>;
+        expect(payload['type'], 'command_result');
+        expect(payload['result'], containsPair('command', entry.value));
+      }
+      expect(ai.classifiedTranscripts, isEmpty);
+    });
+
+    test('anything needing context still goes to the classifier', () async {
+      final vm = buildViewModel();
+      await vm.init('s');
+
+      vm.sendTypedText('next after the onions brown');
+      await flush();
+
+      expect(ai.classifiedTranscripts, ['next after the onions brown']);
+      final payload = ws.sent.single as Map<String, dynamic>;
+      expect(payload['type'], 'user_text');
+    });
+  });
+
+  group('recogniser failures', () {
+    test('a deliberate stop is not mistaken for a timeout restart', () async {
+      final vm = buildViewModel();
+      await vm.init('s');
+      final starts = voice.startCalls;
+
+      await vm.stopListening();
+      // The platform confirms our own stop - this used to trigger an immediate restart.
+      voice.onStatus?.call('notListening');
+      await flush();
+
+      expect(voice.startCalls, starts);
+      expect(vm.state, VoiceState.idle);
+    });
+
+    test('a speech timeout backs off instead of hot-restarting', () {
+      fakeAsync((async) {
+        final vm = buildViewModel();
+        vm.init('s');
+        async.flushMicrotasks();
+        final starts = voice.startCalls;
+
+        voice.emitError('error_speech_timeout', permanent: true);
+        async.flushMicrotasks();
+        expect(voice.startCalls, starts, reason: 'no instant restart into the same error');
+
+        async.elapse(const Duration(milliseconds: 499));
+        expect(voice.startCalls, starts);
+
+        async.elapse(const Duration(milliseconds: 2));
+        async.flushMicrotasks();
+        expect(voice.startCalls, starts + 1);
+        expect(vm.state, VoiceState.listening);
+      });
+    });
+
+    test('consecutive failures increase the delay', () {
+      fakeAsync((async) {
+        final vm = buildViewModel();
+        vm.init('s');
+        async.flushMicrotasks();
+
+        voice.emitError('error_speech_timeout', permanent: true);
+        async.elapse(const Duration(milliseconds: 500));
+        async.flushMicrotasks();
+        expect(voice.startCalls, 2);
+
+        // Second failure waits 1000ms, not 500ms.
+        voice.emitError('error_speech_timeout', permanent: true);
+        async.flushMicrotasks();
+        async.elapse(const Duration(milliseconds: 900));
+        expect(voice.startCalls, 2, reason: 'backing off');
+        async.elapse(const Duration(milliseconds: 110));
+        async.flushMicrotasks();
+        expect(voice.startCalls, 3);
+      });
+    });
+
+    test('errors are ignored once the mic was deliberately stopped', () async {
+      final vm = buildViewModel();
+      await vm.init('s');
+      final starts = voice.startCalls;
+
+      await vm.stopListening();
+      voice.emitError('error_speech_timeout', permanent: true);
+      await flush();
+
+      expect(voice.startCalls, starts);
+      expect(vm.state, VoiceState.idle);
+    });
+
+    test('recognised speech clears the backoff', () {
+      fakeAsync((async) {
+        final vm = buildViewModel();
+        vm.init('s');
+        async.flushMicrotasks();
+
+        voice.emitError('error_speech_timeout', permanent: true);
+        async.flushMicrotasks();
+
+        voice.emitResult('remove onion');
+        async.flushMicrotasks();
+
+        // Next failure is back to the shortest delay (500ms).
+        voice.emitError('error_speech_timeout', permanent: true);
+        async.flushMicrotasks();
+        final starts = voice.startCalls;
+        async.elapse(const Duration(milliseconds: 500));
+        async.flushMicrotasks();
+        expect(voice.startCalls, starts + 1);
+      });
+    });
+
+    test('no restart is scheduled after the view model goes inactive', () {
+      fakeAsync((async) {
+        final vm = buildViewModel();
+        vm.init('s');
+        async.flushMicrotasks();
+        final starts = voice.startCalls;
+
+        voice.emitError('error_speech_timeout', permanent: true);
+        async.flushMicrotasks();
+        vm.pause();
+        async.flushMicrotasks();
+
+        async.elapse(const Duration(seconds: 5));
+        async.flushMicrotasks();
+        expect(voice.startCalls, starts);
+      });
+    });
+  });
+
+  group('duplicate frames', () {
+    int assistants(VoiceViewModel vm) => vm.transcript
+        .where((m) => m.sender == ChatSender.assistant)
+        .length;
+
+    Map<String, dynamic> snapshot(String message, int seq,
+            {bool replay = false}) =>
+        {
+          'type': 'session_snapshot',
+          'data': {'message': message},
+          'seq': seq,
+          if (replay) 'replay': true,
+        };
+
+    test('a frame already handled is not spoken twice', () async {
+      final vm = buildViewModel();
+      await vm.init('s');
+
+      ws.emit(snapshot('Stir the onions for two minutes', 1));
+      await flush();
+      expect(assistants(vm), 1);
+      expect(voice.spoken.length, 1);
+
+      ws.emit(snapshot('Stir the onions for two minutes', 1));
+      await flush();
+      expect(assistants(vm), 1, reason: 'duplicate frame must not bubble');
+      expect(voice.spoken.length, 1, reason: 'duplicate frame must not re-speak');
+    });
+
+    test('the next frame in the sequence is still handled', () async {
+      final vm = buildViewModel();
+      await vm.init('s');
+
+      ws.emit(snapshot('Stir the onions for two minutes', 1));
+      await flush();
+      ws.emit(snapshot('Now add the tomatoes', 2));
+      await flush();
+
+      expect(assistants(vm), 2);
+      expect(voice.spoken.length, 2);
+    });
+
+    test('the same instruction on a NEW seq (double push) stays silent', () async {
+      // Regression: SchedulerService.completeStep broadcast the snapshot to every socket and
+      // the handler then echoed its own copy - identical text, ~250ms apart, different seq, so
+      // the seq check above lets the second frame through and only the text guard can stop it.
+      final vm = buildViewModel();
+      await vm.init('s');
+
+      ws.emit(snapshot('Heat the pan and saute the onions.', 1));
+      await flush();
+      expect(assistants(vm), 1);
+      expect(voice.spoken.length, 1);
+
+      ws.emit(snapshot('Heat the pan and saute the onions.', 2));
+      await flush();
+
+      expect(assistants(vm), 1, reason: 'a new seq must not double a repeated instruction');
+      expect(voice.spoken.length, 1, reason: 'the player from the first copy is still running');
+      expect(vm.lastSnapshot?['message'], 'Heat the pan and saute the onions.',
+          reason: 'the second copy still updates the state');
+    });
+
+    test('a reconnect restarts the sequence so new frames are not dropped',
+        () async {
+      final vm = buildViewModel();
+      await vm.init('s');
+
+      ws.emit(snapshot('Stir the onions for two minutes', 5));
+      await flush();
+      expect(assistants(vm), 1);
+
+      // Socket dropped and re-established - the server starts counting again.
+      ws.emitConnected();
+      ws.emit(snapshot('Now add the tomatoes', 1));
+      await flush();
+
+      expect(assistants(vm), 2, reason: 'post-reconnect frame must not be dropped');
+    });
+
+    test('a replay of the current instruction updates state without speaking',
+        () {
+      fakeAsync((async) {
+        final vm = buildViewModel();
+        vm.init('s');
+        async.flushMicrotasks();
+
+        ws.emit(snapshot('Stir the onions for two minutes', 1));
+        async.flushMicrotasks();
+        expect(voice.spoken.length, 1);
+
+        // Well past the duplicate window: only the replay rule can keep this silent.
+        async.elapse(const Duration(seconds: 10));
+        async.flushMicrotasks();
+        ws.emit(snapshot('Stir the onions for two minutes', 2, replay: true));
+        async.flushMicrotasks();
+
+        expect(vm.lastSnapshot?['message'], 'Stir the onions for two minutes');
+        expect(voice.spoken.length, 1, reason: 'replay must not re-speak');
+        expect(assistants(vm), 1, reason: 'replay must not double the bubble');
+      });
+    });
+
+    test('the same instruction twice inside a few seconds is only said once',
+        () async {
+      final vm = buildViewModel();
+      await vm.init('s');
+
+      vm.speakText('Ready for the next step?');
+      await flush();
+      vm.speakText('Ready for the next step?');
+      await flush();
+
+      expect(voice.spoken.length, 1);
+      expect(assistants(vm), 1);
+    });
+
+    test('frames after pause are ignored', () async {
+      final vm = buildViewModel();
+      await vm.init('s');
+      await vm.pause();
+
+      ws.emit(snapshot('Stir the onions for two minutes', 1));
+      await flush();
+
+      expect(assistants(vm), 0);
+      expect(voice.spoken, isEmpty);
+    });
+  });
+
+  group('connection status', () {
+    Iterable<Map<String, dynamic>> statusFrames() =>
+        ws.sent.whereType<Map<String, dynamic>>().where((f) => f['type'] == 'status');
+
+    test('the first connect does not ask the server for a snapshot', () async {
+      final vm = buildViewModel();
+      await vm.init('s');
+
+      expect(vm.wsConnected, isTrue);
+      expect(statusFrames(), isEmpty,
+          reason: 'the screen drives the first status itself');
+    });
+
+    test('a drop is reported and the next connect re-syncs the session',
+        () async {
+      final vm = buildViewModel();
+      await vm.init('s');
+
+      ws.emitConnected(value: false);
+      await flush();
+      expect(vm.wsConnected, isFalse, reason: 'the screen must be able to say so');
+
+      ws.emitConnected();
+      await flush();
+
+      expect(vm.wsConnected, isTrue);
+      expect(statusFrames(), hasLength(1),
+          reason: 'after a drop the state missed while offline must be re-requested');
+    });
+
+    test('a denied microphone is surfaced to the screen', () async {
+      voice.permissionGranted = false;
+      final vm = buildViewModel();
+
+      await vm.init('s');
+
+      expect(vm.micPermissionDenied, isTrue);
+      expect(voice.startCalls, greaterThanOrEqualTo(1),
+          reason: 'typing must keep working while the mic is off');
+    });
+
+    test('help mode never requests a session status', () async {
+      final vm = buildViewModel();
+      await vm.init('s', helpMode: true);
+
+      ws.emitConnected(value: false);
+      await flush();
+      ws.emitConnected();
+      await flush();
+
+      expect(statusFrames(), isEmpty);
     });
   });
 }

@@ -64,6 +64,20 @@ public class CookingSessionService {
         }
         CookingSession lockedSession = sessionRepository.findByIdForUpdate(session.getId())
                 .orElseThrow(() -> new ResourceNotFoundException("Cooking session not found: " + session.getId()));
+
+        // "ready" can be answered twice (retry, a second device, a slow request repeated).
+        // Re-enqueueing the same dish would give the scheduler a duplicate step queue, so the
+        // already-queued dish is simply returned - before the limit check, so a repeat can
+        // never fail with "too many dishes".
+        String requested = dishName == null ? "" : dishName.trim();
+        for (SessionDish existing : lockedSession.getDishes()) {
+            if (existing.getDishName() != null
+                    && !requested.isEmpty()
+                    && existing.getDishName().trim().equalsIgnoreCase(requested)) {
+                return existing;
+            }
+        }
+
         if (lockedSession.getDishes().size() >= KitchenLimits.MAX_DISHES) {
             throw new IllegalStateException("A cooking session can have at most " + KitchenLimits.MAX_DISHES + " dishes");
         }

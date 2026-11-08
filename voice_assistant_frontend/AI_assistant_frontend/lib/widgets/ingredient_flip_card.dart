@@ -52,8 +52,16 @@ class IngredientFlipCard extends StatelessWidget {
               TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
               TextButton(
                 onPressed: () {
+                  final messenger = ScaffoldMessenger.of(context);
                   context.read<IngredientViewModel>().removeIngredient(ingredient.id);
                   Navigator.pop(ctx);
+                  messenger.hideCurrentSnackBar();
+                  messenger.showSnackBar(
+                    SnackBar(
+                      content: Text('Removed ${ingredient.name} from the list'),
+                      duration: const Duration(seconds: 2),
+                    ),
+                  );
                 },
                 child: const Text('Remove', style: TextStyle(color: Colors.red)),
               ),

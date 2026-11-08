@@ -16,6 +16,7 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -68,5 +69,40 @@ class CookingSessionServiceTest {
 
         verify(recipeService, never()).findOrGenerate(org.mockito.ArgumentMatchers.anyString(),
                 org.mockito.ArgumentMatchers.anyString());
+    }
+
+    @Test
+    void addDishReturnsTheAlreadyQueuedDishInsteadOfDuplicatingIt() {
+        CookingSession session = new CookingSession();
+        session.setId(UUID.randomUUID());
+        SessionDish existing = new SessionDish();
+        existing.setDishName("Paneer Butter Masala");
+        session.getDishes().add(existing);
+        when(sessionRepository.findByIdForUpdate(session.getId())).thenReturn(Optional.of(session));
+
+        SessionDish returned = cookingSessionService.addDish(session, " paneer butter masala ", 3);
+
+        assertEquals(existing, returned);
+        assertEquals(1, session.getDishes().size());
+        verify(recipeService, never()).findOrGenerate(anyString(), anyString());
+    }
+
+    @Test
+    void aRepeatedReadyAnswerCannotTripTheDishLimit() {
+        CookingSession session = new CookingSession();
+        session.setId(UUID.randomUUID());
+        for (int i = 0; i < 4; i++) {
+            SessionDish dish = new SessionDish();
+            dish.setDishName("Dish " + i);
+            session.getDishes().add(dish);
+        }
+        SessionDish alreadyQueued = session.getDishes().get(0);
+        when(sessionRepository.findByIdForUpdate(session.getId())).thenReturn(Optional.of(session));
+
+        // Same dish, spelled with different casing - must be recognised as the one already queued.
+        SessionDish returned = cookingSessionService.addDish(session, "dish 0", 2);
+
+        assertEquals(alreadyQueued, returned);
+        assertEquals(4, session.getDishes().size());
     }
 }

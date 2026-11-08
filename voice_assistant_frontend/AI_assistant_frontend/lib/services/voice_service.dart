@@ -6,9 +6,6 @@ import 'package:flutter_tts/flutter_tts.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:audioplayers/audioplayers.dart';
-import '../core/constants/api_constants.dart';
-import '../core/network/api_client.dart';
-import '../core/utils/result.dart';
 
 enum VoiceState { idle, listening, thinking, speaking }
 
@@ -16,7 +13,15 @@ enum VoiceState { idle, listening, thinking, speaking }
 /// a fake without touching the STT/TTS/audio plugins.
 abstract class VoiceEngine {
   Future<bool> requestMicPermission();
-  Future<bool> initSpeech({void Function(String status)? onStatus});
+
+  /// [onStatus] reports recognizer status changes (`listening`, `notListening`, `done`...).
+  /// [onError] reports recognizer failures as `(code, permanent)` so the caller can back off
+  /// instead of hot-restarting into the same error forever.
+  Future<bool> initSpeech({
+    void Function(String status)? onStatus,
+    void Function(String code, bool permanent)? onError,
+  });
+
   Future<void> initTts();
   Future<void> startListening({
     required void Function(String text, bool isFinal) onResult,
@@ -34,6 +39,13 @@ class VoiceService implements VoiceEngine {
   final AudioPlayer _audioPlayer = AudioPlayer();
   bool _sttReady = false;
 
+  /// A `permanent: true` recognition error means the platform session is dead - the next
+  /// listen() would silently do nothing, so we re-initialise first.
+  bool _needsReinit = false;
+
+  void Function(String status)? _onStatus;
+  void Function(String code, bool permanent)? _onError;
+
   @override
   Future<bool> requestMicPermission() async {
     final status = await Permission.microphone.request();
@@ -41,15 +53,34 @@ class VoiceService implements VoiceEngine {
   }
 
   @override
-  Future<bool> initSpeech({void Function(String status)? onStatus}) async {
-    if (_sttReady) return true;
-    _sttReady = await _speech.initialize(
-      onError: (e) => debugPrint("STT Error: $e"),
-      onStatus: (s) {
-        if (onStatus != null) onStatus(s);
-        debugPrint("STT Status: $s");
-      },
-    );
+  Future<bool> initSpeech({
+    void Function(String status)? onStatus,
+    void Function(String code, bool permanent)? onError,
+  }) async {
+    if (onStatus != null) _onStatus = onStatus;
+    if (onError != null) _onError = onError;
+    if (_sttReady && !_needsReinit) return true;
+    return _initialize();
+  }
+
+  Future<bool> _initialize() async {
+    _needsReinit = false;
+    try {
+      _sttReady = await _speech.initialize(
+        onError: (e) {
+          debugPrint("STT Error: $e");
+          if (e.permanent) _needsReinit = true;
+          _onError?.call(e.errorMsg, e.permanent);
+        },
+        onStatus: (s) {
+          debugPrint("STT Status: $s");
+          _onStatus?.call(s);
+        },
+      );
+    } catch (e) {
+      debugPrint("STT init failed: $e");
+      _sttReady = false;
+    }
     return _sttReady;
   }
 
@@ -65,16 +96,21 @@ class VoiceService implements VoiceEngine {
   Future<void> startListening({
     required void Function(String text, bool isFinal) onResult,
   }) async {
-    if (!_sttReady) await initSpeech();
+    // Re-initialise after a permanent error - otherwise listen() is a no-op.
+    if (!_sttReady || _needsReinit) {
+      if (!await _initialize()) return;
+    }
     if (!_sttReady) return;
 
     await _speech.listen(
       onResult: (r) => onResult(r.recognizedWords, r.finalResult),
       listenOptions: stt.SpeechListenOptions(
-        listenFor: const Duration(seconds: 60),
-        pauseFor: const Duration(seconds: 20),
+        listenFor: const Duration(seconds: 12),
+        pauseFor: const Duration(seconds: 12),
         partialResults: true,
-        onDevice: true,
+        // NOTE: no `onDevice: true`. On-device recognisers are missing on emulators and many
+        // budget devices, which produced instant `error_speech_timeout` loops. Let the platform
+        // pick its best available recogniser.
       ),
     );
   }
@@ -94,41 +130,27 @@ class VoiceService implements VoiceEngine {
     return completer.future;
   }
 
-  /// Calls backend synthesis or plays provided audio
+  /// Plays the audio the backend attached to the message, otherwise speaks on-device.
+  /// Deliberately does NOT call the synthesis endpoint when no audio arrived: if the backend
+  /// had been able to synthesise the text, the audio would already be attached - asking it
+  /// again only adds another network round trip in front of every spoken instruction.
   @override
   Future<void> synthesizeAndPlay(String text, {String? audioBase64}) async {
-    try {
-      if (audioBase64 != null && audioBase64.isNotEmpty) {
+    if (audioBase64 != null && audioBase64.isNotEmpty) {
+      try {
         final bytes = base64Decode(audioBase64);
         await _audioPlayer.play(BytesSource(Uint8List.fromList(bytes)));
         await _audioPlayer.onPlayerComplete.first;
         return;
+      } catch (e) {
+        debugPrint("Audio Service Error: $e");
       }
+    }
 
-      // No base64 provided, call synthesis endpoint
-      final res = await ApiClient.instance.post(ApiConstants.synthesize, body: {'text': text});
-      if (res is Success) {
-        final data = res.data;
-        String? b64;
-        if (data is Map) {
-          b64 = data['audio']?.toString() ?? data['audioContent']?.toString() ?? data['messageAudioBase64']?.toString();
-        } else if (data is String) {
-          b64 = data;
-        }
-
-        if (b64 != null && b64.isNotEmpty) {
-          final bytes = base64Decode(b64);
-          await _audioPlayer.play(BytesSource(Uint8List.fromList(bytes)));
-          await _audioPlayer.onPlayerComplete.first;
-        } else {
-          await speakLocally(text);
-        }
-      } else {
-        await speakLocally(text);
-      }
+    try {
+      await speakLocally(text);
     } catch (e) {
       debugPrint("Audio Service Error: $e");
-      await speakLocally(text);
     }
   }
 

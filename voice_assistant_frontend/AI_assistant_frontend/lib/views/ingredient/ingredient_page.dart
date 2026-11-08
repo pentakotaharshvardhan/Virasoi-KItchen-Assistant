@@ -40,7 +40,7 @@ class _IngredientPageState extends State<IngredientPage>
       if (_vm.sessionId != null) {
         // "What's left on the list?" -> read out whatever is still pending.
         _voiceVm.onRemainingItemsRequest = () async => _vm.remainingNames;
-        _voiceVm.onIngredientsRemoved = _vm.markConfirmedByNames;
+        _voiceVm.onIngredientsRemoved = _onIngredientsRemovedByVoice;
         _voiceVm.onAvailableIngredients = () async => _vm.remainingNames;
         await _voiceVm.init(_vm.sessionId);
       }
@@ -86,26 +86,51 @@ class _IngredientPageState extends State<IngredientPage>
         _navigating = false;
         return;
       }
-
-      // Close our voice socket first so it doesn't speak the first cooking instruction; the
-      // cooking screen reconnects and asks for the current snapshot itself.
-      _handingOff = true;
-      await _voiceVm.detach();
-
-      // Cooking does NOT start yet - the cooking screen first asks "are you ready?" and only
-      // adds the dish (starting the scheduler) once the user says yes.
-      Navigator.pushReplacementNamed(
-        context,
-        AppRoutes.voiceAssistant,
-        arguments: {
-          'sessionId': _vm.sessionId,
-          'awaitingReady': true,
-          // The steps panel follows the first dish of the meal.
-          'recipeId':
-              widget.recipeIds.isNotEmpty ? widget.recipeIds.first : null,
-        },
-      );
+      await _goToCooking();
     });
+  }
+
+  /// Hands the session over to the cooking screen. Also reachable manually, so an ingredient
+  /// that was never confirmed (the assistant failed to remove it, a photo never loaded, the
+  /// session expired) can never leave the user stuck on this screen.
+  Future<void> _goToCooking() async {
+    if (_handingOff) return;
+    _navigating = true;
+    if (mounted) setState(() {});
+
+    // Close our voice socket first so it doesn't speak the first cooking instruction; the
+    // cooking screen reconnects and asks for the current snapshot itself.
+    _handingOff = true;
+    await _voiceVm.detach();
+    if (!mounted) return;
+
+    // Cooking does NOT start yet - the cooking screen first asks "are you ready?" and only
+    // adds the dish (starting the scheduler) once the user says yes.
+    Navigator.pushReplacementNamed(
+      context,
+      AppRoutes.voiceAssistant,
+      arguments: {
+        'sessionId': _vm.sessionId,
+        'awaitingReady': true,
+        // The steps panel follows the first dish of the meal.
+        'recipeId': widget.recipeIds.isNotEmpty ? widget.recipeIds.first : null,
+      },
+    );
+  }
+
+  /// Voice-driven removals land here: confirm the item and tell the user what changed so a
+  /// silently-dropped acknowledgement is immediately visible.
+  void _onIngredientsRemovedByVoice(List<String> names) {
+    _vm.markConfirmedByNames(names);
+    if (!mounted || names.isEmpty) return;
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text('Removed from the list: ${names.join(', ')}'),
+        duration: const Duration(seconds: 2),
+      ),
+    );
   }
 
   Future<void> _openHelpAssistant() async {
@@ -228,6 +253,20 @@ class _IngredientPageState extends State<IngredientPage>
                       ),
 
                     const SizedBox(height: 32),
+
+                    // Manual escape hatch: the grid only auto-advances once everything is
+                    // confirmed, so the user must always be able to move on regardless.
+                    GradientButton(
+                      label: vm.isDoneConfirming
+                          ? 'Start cooking'
+                          : 'Continue to cooking (${vm.pending.length} left)',
+                      icon: Icons.soup_kitchen_rounded,
+                      onPressed:
+                          (_navigating || _handingOff || vm.isLoading)
+                              ? null
+                              : _goToCooking,
+                    ),
+                    const SizedBox(height: 12),
 
                     GradientButton(
                       label: 'Helper Assistant',

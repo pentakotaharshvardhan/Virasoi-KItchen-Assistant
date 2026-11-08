@@ -5,6 +5,7 @@ import com.example.voice_assistant.service.VoiceCommandService;
 import com.example.voice_assistant.dto.response.UserTaskDto;
 import com.example.voice_assistant.entity.CookingSession;
 import com.example.voice_assistant.entity.Recipe;
+import com.example.voice_assistant.repository.SessionDishStepRepository;
 import com.example.voice_assistant.service.CookingSessionService;
 import com.example.voice_assistant.service.RecipeService;
 import com.example.voice_assistant.service.SchedulerService;
@@ -59,6 +60,7 @@ public class AudioStreamWebSocketHandler extends TextWebSocketHandler {
     private final WebSocketSessionRegistry registry;
     private final ObjectMapper objectMapper;
     private final VoiceCommandService voiceCommandService; // ADD
+    private final SessionDishStepRepository sessionDishStepRepository;
 
     // per-socket scratch state
     private final Map<String, ByteArrayOutputStream> buffers = new ConcurrentHashMap<>();
@@ -70,7 +72,8 @@ public class AudioStreamWebSocketHandler extends TextWebSocketHandler {
     public AudioStreamWebSocketHandler(SpeechToTextService speechToTextService, TextToSpeechService textToSpeechService,
                                        RecipeService recipeService, CookingSessionService cookingSessionService,
                                        SchedulerService schedulerService, WebSocketSessionRegistry registry,
-                                       ObjectMapper objectMapper, VoiceCommandService voiceCommandService) { // ADD param
+                                       ObjectMapper objectMapper, VoiceCommandService voiceCommandService,
+                                       SessionDishStepRepository sessionDishStepRepository) { // ADD param
         this.speechToTextService = speechToTextService;
         this.textToSpeechService = textToSpeechService;
         this.recipeService = recipeService;
@@ -79,6 +82,7 @@ public class AudioStreamWebSocketHandler extends TextWebSocketHandler {
         this.registry = registry;
         this.objectMapper = objectMapper;
         this.voiceCommandService = voiceCommandService; // ADD
+        this.sessionDishStepRepository = sessionDishStepRepository;
     }
 
     @Override
@@ -144,11 +148,12 @@ public class AudioStreamWebSocketHandler extends TextWebSocketHandler {
         }
 
         // A client (re)connecting to an in-progress session asks for the current state so it can
-        // speak the active instruction instead of sitting on a stale orb.
+        // speak the active instruction instead of sitting on a stale orb. Marked as a replay so
+        // repeating the instruction the user just heard doesn't get spoken twice.
         if (action.isEmpty() && "status".equals(type)) {
             UUID sessionId = extractSessionId(session);
             if (sessionId != null) {
-                send(session, "session_snapshot", schedulerService.status(sessionId));
+                send(session, "session_snapshot", schedulerService.status(sessionId), true);
             }
             return;
         }
@@ -368,7 +373,7 @@ public class AudioStreamWebSocketHandler extends TextWebSocketHandler {
         if (command == VoiceCommandService.Command.FREE_USER) {
             SessionSnapshotDto snapshot = schedulerService.releaseUser(sessionId);
             lastSpokenMessage.put(session.getId(), snapshot.message);
-            send(session, "session_snapshot", snapshot);
+            sendSnapshot(session, sessionId, snapshot);
             return;
         }
         if (command == VoiceCommandService.Command.NEXT
@@ -379,7 +384,7 @@ public class AudioStreamWebSocketHandler extends TextWebSocketHandler {
                     : List.of(parsed.stoveIndex);
             SessionSnapshotDto snapshot = schedulerService.completeStoveSteps(sessionId, stoveIndices);
             lastSpokenMessage.put(session.getId(), snapshot.message);
-            send(session, "session_snapshot", snapshot);
+            sendSnapshot(session, sessionId, snapshot);
             return;
         }
 
@@ -394,7 +399,17 @@ public class AudioStreamWebSocketHandler extends TextWebSocketHandler {
             stepId = schedulerService.findActiveStepIdForDish(sessionId, parsed.dishName).orElse(null);
         }
         if (stepId == null) {
-            stepId = meta.get("stepId") != null ? UUID.fromString(meta.get("stepId").toString()) : currentUserTaskStepId(sessionId);
+            stepId = parseStepId(meta.get("stepId"));
+            if (stepId == null) {
+                stepId = currentUserTaskStepId(sessionId);
+            }
+        }
+        // Repair a stale id: the app can hand back a step it captured before the session moved
+        // on (already completed, or from an earlier run of the screen). Falling back to the live
+        // current task keeps "next"/"wait" working instead of failing the whole command.
+        if (stepId != null && sessionId != null
+                && !sessionDishStepRepository.existsByIdAndSessionDishSession_Id(stepId, sessionId)) {
+            stepId = currentUserTaskStepId(sessionId);
         }
         if (stepId == null) {
             send(session, "error", Map.of("message", "I couldn't tell which step you mean - try naming the stove number or dish."));
@@ -426,6 +441,20 @@ public class AudioStreamWebSocketHandler extends TextWebSocketHandler {
         }
 
         lastSpokenMessage.put(session.getId(), snapshot.message);
+        sendSnapshot(session, sessionId, snapshot);
+    }
+
+    /**
+     * The scheduler methods (tick/completeStep/waitOnStep/...) already broadcast the snapshot to
+     * every socket of the session through NotificationService.pushSnapshot(). Sending it again
+     * from here gave the requester two identical frames with two different sequence numbers, so
+     * the app's seq check could not drop the second one and the instruction appeared twice.
+     */
+    private void sendSnapshot(WebSocketSession session, UUID sessionId, SessionSnapshotDto snapshot) throws Exception {
+        boolean alreadyReceived = snapshot.alreadyPushed
+                && sessionId != null
+                && registry.get(sessionId).contains(session);
+        if (alreadyReceived) return;
         send(session, "session_snapshot", snapshot);
     }
 
@@ -433,6 +462,16 @@ public class AudioStreamWebSocketHandler extends TextWebSocketHandler {
         SessionSnapshotDto snapshot = schedulerService.tick(sessionId);
         UserTaskDto task = snapshot.currentUserTask;
         return task == null ? null : task.stepId;
+    }
+
+    /** meta.stepId arrives as free-form text; a malformed id must not blow up the socket. */
+    private UUID parseStepId(Object raw) {
+        if (raw == null) return null;
+        try {
+            return UUID.fromString(raw.toString());
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
     }
 
     private boolean containsAny(String haystack, String... needles) {
@@ -501,24 +540,51 @@ public class AudioStreamWebSocketHandler extends TextWebSocketHandler {
         send(session, "prompt", data);
     }
 
-    /** Sends a message to every socket registered for this session. */
+    /** Sends a message to every socket registered for this session. One sequence number per event. */
     private void broadcast(UUID sessionId, String type, Object data, WebSocketSession exclude) throws Exception {
         if (sessionId == null) return;
-        String payload = objectMapper.writeValueAsString(Map.of("type", type, "data", data));
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("type", type);
+        payload.put("data", data);
+        payload.put("seq", registry.nextSeq(WebSocketSessionRegistry.sessionChannel(sessionId)));
+        String json = objectMapper.writeValueAsString(payload);
         for (WebSocketSession ws : registry.get(sessionId)) {
             if (ws == exclude || !ws.isOpen()) continue;
             synchronized (ws) {
-                ws.sendMessage(new TextMessage(payload));
+                ws.sendMessage(new TextMessage(json));
             }
         }
     }
 
     private void send(WebSocketSession session, String type, Object data) throws Exception {
-        String payload = objectMapper.writeValueAsString(Map.of("type", type, "data", data));
+        send(session, type, data, false);
+    }
+
+    /**
+     * Sends a frame stamped with a per-session sequence number. {@code replay} marks a
+     * response that merely repeats current state (a client re-asked for the snapshot), which
+     * the app shows without re-speaking if it already said the same thing.
+     */
+    private void send(WebSocketSession session, String type, Object data, boolean replay) throws Exception {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("type", type);
+        payload.put("data", data);
+        payload.put("seq", nextSeq(session));
+        if (replay) payload.put("replay", true);
         if (session.isOpen()) {
+            String json = objectMapper.writeValueAsString(payload);
             synchronized (session) {
-                session.sendMessage(new TextMessage(payload));
+                session.sendMessage(new TextMessage(json));
             }
         }
+    }
+
+    /** Frames for a cooking session share its counter; frames outside one (help mode) use the socket. */
+    private long nextSeq(WebSocketSession session) {
+        UUID sessionId = extractSessionId(session);
+        String channel = sessionId != null
+                ? WebSocketSessionRegistry.sessionChannel(sessionId)
+                : "socket:" + session.getId();
+        return registry.nextSeq(channel);
     }
 }

@@ -37,6 +37,9 @@ public class NotificationService {
     }
 
     public void pushSnapshot(UUID cookingSessionId, SessionSnapshotDto snapshot) {
+        // Mark it first: the caller (WebSocket handler) checks this flag and skips its own
+        // copy, so the requester's socket receives the snapshot exactly once.
+        snapshot.alreadyPushed = true;
         try {
             snapshot.message = personalize(snapshot);
         } catch (Exception ignored) {
@@ -49,7 +52,8 @@ public class NotificationService {
         }
 
         try {
-            String payload = objectMapper.writeValueAsString(new WsEnvelope("session_snapshot", snapshot));
+            long seq = registry.nextSeq(WebSocketSessionRegistry.sessionChannel(cookingSessionId));
+            String payload = objectMapper.writeValueAsString(new WsEnvelope("session_snapshot", snapshot, seq));
             for (WebSocketSession ws : registry.get(cookingSessionId)) {
                 if (ws.isOpen()) {
                     synchronized (ws) {
@@ -102,6 +106,7 @@ public class NotificationService {
                 snapshot.message, ingredientName, quantityPerServe, unit, servesRequested, stoveIndex);
     }
 
-    public record WsEnvelope(String type, Object data) {
+    /** seq = per-session frame counter; lets the app drop a frame it has already handled. */
+    public record WsEnvelope(String type, Object data, long seq) {
     }
 }

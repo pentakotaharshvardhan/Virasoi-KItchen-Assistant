@@ -10,6 +10,8 @@ import '../services/ai_service.dart';
 import '../services/voice_service.dart';
 
 class VoiceViewModel extends ChangeNotifier {
+  static const _listenWindow = Duration(seconds: 12);
+
   VoiceViewModel({
     VoiceEngine? voice,
     AiService? aiService,
@@ -50,34 +52,79 @@ class VoiceViewModel extends ChangeNotifier {
   Future<List<String>> Function()? onRemainingItemsRequest;
   void Function(List<String> names)? onIngredientsRemoved;
 
-  Timer? _stabilityTimer;
-  Timer? _absoluteTimeoutTimer;
+  Timer? _listenWindowTimer;
   Timer? _heartbeatTimer;
-  String _lastLiveText = '';
+  Timer? _sttRetryTimer;
   String _finalizedTranscript = '';
   String _partialTranscript = '';
   bool _isRestartingListener = false;
+  bool _isClosingListenWindow = false;
+
+  /// Highest server sequence number already handled on the current socket. The backend stamps
+  /// every frame with a per-session `seq`, so a re-pushed snapshot or a frame delivered twice
+  /// (two sockets registered for one session) is dropped instead of spoken again.
+  int _lastSeq = 0;
+
+  /// Bumped whenever the socket is replaced (init/detach/dispose) so a late frame from an
+  /// already-discarded connection cannot be handled twice.
+  int _wsEpoch = 0;
+  StreamSubscription<Map<String, dynamic>>? _wsSub;
+  StreamSubscription<bool>? _wsConnSub;
+
+  /// Exact text of the last thing we said, and when - used to swallow duplicates that arrive
+  /// within a few seconds (double pushes, a replayed snapshot, a second socket).
+  String? _lastSpokenText;
+  DateTime? _lastSpokenAt;
+
+  /// True while WE asked the recogniser to stop (end of a listen window, sending a command).
+  /// The platform then reports `notListening`, which must not be mistaken for a timeout that
+  /// needs an immediate restart - that flapping was `listening -> notListening -> listening`.
+  bool _expectStop = false;
+
+  /// Consecutive recogniser failures; drives the backoff so a permanent timeout cannot
+  /// spin-restart forever. Reset as soon as real speech is recognised.
+  int _sttErrorCount = 0;
+  static const _sttBackoff = [500, 1000, 2000, 4000];
 
   /// False while the microphone is intentionally paused (e.g. the screen was left, or we're
   /// handing off to another screen). Prevents a finishing TTS playback from auto-resuming the mic.
   bool _active = false;
   bool _hasBackendSession = false;
 
+  /// Live connection flag for the screen: while it is false the UI says so instead of
+  /// looking like the assistant simply ignored the user (the socket retries silently).
+  bool wsConnected = false;
+
+  /// True once a socket has come up, so only a RE-connect asks the server what it missed
+  /// (the first connect is driven by the screen itself).
+  bool _wsConnectedOnce = false;
+
+  /// Set when the microphone permission came back denied - there is then nothing to listen
+  /// with, and the user has to be told instead of watching a dead mic button.
+  bool micPermissionDenied = false;
+
   Future<void> init(String? sid, {bool helpMode = false}) async {
     print("VoiceViewModel: Initializing (HelpMode: $helpMode, Session: $sid)");
     // Tear down any previous socket/timers first so repeated init() calls (ingredient page ->
     // cooking page, helper assistant and back) never leave a second listener running.
+    _wsSub?.cancel();
+    _wsSub = null;
+    _wsConnSub?.cancel();
+    _wsConnSub = null;
+    _wsEpoch++;
     _ws?.dispose();
     _ws = null;
-    _stabilityTimer?.cancel();
-    _absoluteTimeoutTimer?.cancel();
+    _listenWindowTimer?.cancel();
     _heartbeatTimer?.cancel();
+    _sttRetryTimer?.cancel();
+    _sttRetryTimer = null;
+    _isClosingListenWindow = false;
+    _sttErrorCount = 0;
 
     isHelpMode = helpMode;
     _hasBackendSession = sid != null;
     sessionId = sid ?? const Uuid().v4();
     liveTranscript = '';
-    _lastLiveText = '';
     _finalizedTranscript = '';
     _partialTranscript = '';
     state = VoiceState.idle;
@@ -87,11 +134,22 @@ class VoiceViewModel extends ChangeNotifier {
     // onRemainingItemsRequest is intentionally NOT cleared here: the Ingredient screen
     // registers it while it sits underneath this one in the nav stack.
     lastSnapshot = null;
+    _lastSeq = 0;
+    _lastSpokenText = null;
+    _lastSpokenAt = null;
+    wsConnected = false;
+    _wsConnectedOnce = false;
+    micPermissionDenied = false;
     notifyListeners();
 
     // 1. Permissions & Setup
-    await _voice.requestMicPermission();
-    await _voice.initSpeech(onStatus: _handleSttStatus);
+    final micGranted = await _voice.requestMicPermission();
+    micPermissionDenied = micGranted != true;
+    if (micPermissionDenied) notifyListeners();
+    await _voice.initSpeech(
+      onStatus: _handleSttStatus,
+      onError: _handleSttError,
+    );
     await _voice.initTts();
 
     // 2. WebSocket Connection (only for non-help mode if preferred, but safe to connect always)
@@ -99,7 +157,34 @@ class VoiceViewModel extends ChangeNotifier {
     _ws = _wsFactory(
         ApiConstants.wsVoiceAssistant(token ?? '', sessionId!), token);
     _ws!.connect();
-    _ws!.messages.listen(_handleServerMessage);
+    // connect() reports failures through the listener below; the first `true` it would emit
+    // happens before the listener exists, so record the first connect here to keep a later
+    // drop-and-return distinguishable from it.
+    wsConnected = true;
+    _wsConnectedOnce = true;
+    final epoch = _wsEpoch;
+    _wsSub = _ws!.messages.listen((msg) {
+      if (epoch != _wsEpoch) return; // stale socket from an earlier init/detach
+      _handleServerMessage(msg);
+    });
+    // On every (re)connect forget the last sequence number: the server's counter restarts
+    // with a fresh connection, so keeping it would drop the new frames as duplicates.
+    _wsConnSub = _ws!.connectionState.listen((connected) {
+      if (epoch != _wsEpoch) return;
+      final changed = wsConnected != connected;
+      wsConnected = connected;
+      if (connected) {
+        final isReconnect = _wsConnectedOnce;
+        _wsConnectedOnce = true;
+        _lastSeq = 0;
+        // A dropped socket means the kitchen kept cooking without us: ask for the current
+        // state again (the answer is a replay frame, so it only speaks if it says anything new).
+        if (isReconnect && !isHelpMode && _hasBackendSession && !readyCheckActive) {
+          requestStatus();
+        }
+      }
+      if (changed) notifyListeners();
+    });
     _startSessionHeartbeat();
 
     // 3. Auto-start listening
@@ -108,13 +193,47 @@ class VoiceViewModel extends ChangeNotifier {
 
   void _handleSttStatus(String status) {
     debugPrint("STT Status changed: $status");
+    // A stop we asked for ourselves - never treat it as a reason to restart.
+    if (_expectStop) return;
     if ((status == 'done' || status == 'notListening') &&
         state == VoiceState.listening &&
-        !_isRestartingListener) {
-      _isRestartingListener = true;
-      _startListeningInternal(preserveTranscript: true).whenComplete(() {
-        _isRestartingListener = false;
-      });
+        _active &&
+        !_isClosingListenWindow) {
+      _restartListener(preserveTranscript: true);
+    }
+  }
+
+  /// Recogniser failures arrive as e.g. `error_speech_timeout, permanent: true`. Restarting
+  /// straight away just re-enters the same failure, so back off instead - and only while the
+  /// mic is actually supposed to be on.
+  void _handleSttError(String code, bool permanent) {
+    debugPrint("STT error: $code (permanent: $permanent)");
+    if (!_active ||
+        _expectStop ||
+        _isClosingListenWindow ||
+        state != VoiceState.listening) {
+      return;
+    }
+    if (_isRestartingListener || _sttRetryTimer != null) return;
+
+    final step = (_sttErrorCount < _sttBackoff.length)
+        ? _sttErrorCount
+        : _sttBackoff.length - 1;
+    _sttErrorCount++;
+    _sttRetryTimer = Timer(Duration(milliseconds: _sttBackoff[step]), () {
+      _sttRetryTimer = null;
+      if (!_active || state != VoiceState.listening) return;
+      _restartListener(preserveTranscript: true);
+    });
+  }
+
+  Future<void> _restartListener({required bool preserveTranscript}) async {
+    if (_isRestartingListener) return;
+    _isRestartingListener = true;
+    try {
+      await _startListeningInternal(preserveTranscript: preserveTranscript);
+    } finally {
+      _isRestartingListener = false;
     }
   }
 
@@ -124,7 +243,8 @@ class VoiceViewModel extends ChangeNotifier {
         state == VoiceState.speaking ||
         state == VoiceState.thinking) return;
 
-    _startAbsoluteTimeout();
+    _listenWindowTimer?.cancel();
+    _listenWindowTimer = Timer(_listenWindow, _finishListenWindow);
     await _startListeningInternal();
   }
 
@@ -132,9 +252,10 @@ class VoiceViewModel extends ChangeNotifier {
       {bool preserveTranscript = false}) async {
     print("Voice: Listening starting...");
     state = VoiceState.listening;
+    // From here on any `notListening` is either a timeout or an error, never our own stop.
+    _expectStop = false;
     if (!preserveTranscript) {
       liveTranscript = '';
-      _lastLiveText = '';
       _finalizedTranscript = '';
       _partialTranscript = '';
     }
@@ -146,26 +267,6 @@ class VoiceViewModel extends ChangeNotifier {
 
         _updateTranscript(text, isFinal);
         notifyListeners();
-
-        if (text.trim().isNotEmpty) {
-          _startAbsoluteTimeout();
-
-          _stabilityTimer?.cancel();
-          _stabilityTimer = Timer(const Duration(seconds: 20), () {
-            if (liveTranscript.trim().isNotEmpty &&
-                liveTranscript == _lastLiveText) {
-              print(
-                  "Voice: 20s silence reached for '$liveTranscript'. Sending...");
-              _sendUserText(liveTranscript.trim());
-            }
-          });
-          _lastLiveText = liveTranscript;
-        } else {
-          _stabilityTimer?.cancel();
-        }
-        if (isFinal && liveTranscript.trim().isNotEmpty) {
-          _sendUserText(liveTranscript.trim());
-        }
       },
     );
   }
@@ -173,6 +274,10 @@ class VoiceViewModel extends ChangeNotifier {
   void _updateTranscript(String text, bool isFinal) {
     final recognized = text.trim();
     if (recognized.isEmpty) return;
+    // Real speech means the recogniser is healthy again - clear the error backoff.
+    _sttErrorCount = 0;
+    _sttRetryTimer?.cancel();
+    _sttRetryTimer = null;
 
     final finalizedLower = _finalizedTranscript.toLowerCase();
     final recognizedLower = recognized.toLowerCase();
@@ -208,21 +313,42 @@ class VoiceViewModel extends ChangeNotifier {
     }
   }
 
-  void _startAbsoluteTimeout() {
-    _absoluteTimeoutTimer?.cancel();
-    _absoluteTimeoutTimer = Timer(const Duration(minutes: 10), () {
-      if (state == VoiceState.listening) {
-        stopListening();
-        state = VoiceState.idle;
-        notifyListeners();
-      }
-    });
+  Future<void> _finishListenWindow() async {
+    _listenWindowTimer = null;
+    if (state != VoiceState.listening || !_active) return;
+
+    _isClosingListenWindow = true;
+    _expectStop = true;
+    try {
+      await _voice.stopListening();
+    } finally {
+      _isClosingListenWindow = false;
+    }
+
+    if (state != VoiceState.listening || !_active) return;
+    final text = liveTranscript.trim();
+    if (text.isNotEmpty) {
+      _sendUserText(text);
+      return;
+    }
+
+    state = VoiceState.idle;
+    notifyListeners();
+    startListening();
   }
 
   Future<void> stopListening() async {
-    _stabilityTimer?.cancel();
-    _absoluteTimeoutTimer?.cancel();
-    await _voice.stopListening();
+    _listenWindowTimer?.cancel();
+    _listenWindowTimer = null;
+    _sttRetryTimer?.cancel();
+    _sttRetryTimer = null;
+    _isClosingListenWindow = true;
+    _expectStop = true;
+    try {
+      await _voice.stopListening();
+    } finally {
+      _isClosingListenWindow = false;
+    }
     if (state == VoiceState.listening) state = VoiceState.idle;
     notifyListeners();
   }
@@ -243,6 +369,11 @@ class VoiceViewModel extends ChangeNotifier {
   Future<void> detach() async {
     await pause();
     pauseSessionHeartbeat();
+    _wsSub?.cancel();
+    _wsSub = null;
+    _wsConnSub?.cancel();
+    _wsConnSub = null;
+    _wsEpoch++;
     _ws?.dispose();
     _ws = null;
     sessionId = null;
@@ -255,8 +386,8 @@ class VoiceViewModel extends ChangeNotifier {
   }
 
   void _sendUserText(String text) async {
-    _stabilityTimer?.cancel();
-    _lastLiveText = '';
+    _listenWindowTimer?.cancel();
+    _listenWindowTimer = null;
 
     // Reset live text so it's not visible while thinking
     liveTranscript = '';
@@ -266,6 +397,7 @@ class VoiceViewModel extends ChangeNotifier {
     state = VoiceState.thinking;
     notifyListeners();
 
+    _expectStop = true;
     _voice.stopListening();
 
     // Ready-check: the dish hasn't been added to the session yet, so answer locally.
@@ -283,6 +415,20 @@ class VoiceViewModel extends ChangeNotifier {
         _handleServerMessage({'type': 'error', 'message': res.message});
       }
     } else {
+      final fastPath = _fastPathCommand(text);
+      if (fastPath != null) {
+        // An unambiguous one-word instruction skips the classification round trip: the
+        // backend applies exactly the same action to a command_result, so "next"/"repeat"/
+        // "stop" must never wait on a network call (let alone Gemini) to take effect.
+        print("DEBUG: Keyword fast-path -> $fastPath");
+        _ws?.send({
+          'type': 'command_result',
+          'sessionId': sessionId,
+          'text': text,
+          'result': VoiceCommandResult(command: fastPath).toJson(),
+        });
+        return;
+      }
       print("DEBUG: Sending Command Transcript -> '$text'");
       final availableIngredients =
           await onAvailableIngredients?.call() ?? const <String>[];
@@ -309,6 +455,37 @@ class VoiceViewModel extends ChangeNotifier {
           });
       }
     }
+  }
+
+  /// Utterances that need no understanding of context at all: the backend maps these exact
+  /// phrases to the same commands, so sending them straight as a command_result removes a
+  /// classification round trip from the most latency-sensitive controls. Anything longer or
+  /// not listed (ingredient names, stove numbers, questions) still goes to the classifier.
+  static const _fastPathCommands = <String, String>{
+    'next': 'NEXT',
+    'done': 'NEXT',
+    "i'm done": 'NEXT',
+    'i am done': 'NEXT',
+    'finished': 'NEXT',
+    'wait': 'WAIT',
+    'not yet': 'WAIT',
+    'hold on': 'WAIT',
+    'repeat': 'REPEAT',
+    'say that again': 'REPEAT',
+    'what did you say': 'REPEAT',
+    'stop': 'STOP',
+    'cancel': 'STOP',
+    'pause everything': 'STOP',
+    'help': 'HELP',
+  };
+
+  static String? _fastPathCommand(String raw) {
+    var t = raw.toLowerCase().trim();
+    while (t.isNotEmpty && '!.?'.contains(t[t.length - 1])) {
+      t = t.substring(0, t.length - 1).trimRight();
+    }
+    if (t.length > 24) return null;
+    return _fastPathCommands[t];
   }
 
   void _startSessionHeartbeat() {
@@ -349,9 +526,9 @@ class VoiceViewModel extends ChangeNotifier {
     readyCheckActive = true;
     onUserReady = onReady;
     if (announce) {
-      await _voice.stopListening();
-      if (state == VoiceState.listening) state = VoiceState.idle;
-      notifyListeners();
+      _listenWindowTimer?.cancel();
+      _listenWindowTimer = null;
+      await stopListening();
       _speak('All ingredients are gathered. Are you ready to start cooking?');
     }
   }
@@ -420,6 +597,17 @@ class VoiceViewModel extends ChangeNotifier {
 
   void _handleServerMessage(Map<String, dynamic> msg) {
     print("WS RECEIVED FULL JSON: $msg");
+    // Duplicate delivery of a frame we already handled - the same instruction twice is never
+    // a new instruction, so drop it before it can add a chat bubble and speak again.
+    final seq = msg['seq'];
+    if (seq is num) {
+      final s = seq.toInt();
+      if (s <= _lastSeq) {
+        debugPrint("WS: dropped duplicate seq=$s (last handled $_lastSeq)");
+        return;
+      }
+      _lastSeq = s;
+    }
     if (!_active) return;
     final type = msg['type']?.toString();
     final data = msg['data'] as Map<String, dynamic>?;
@@ -438,7 +626,18 @@ class VoiceViewModel extends ChangeNotifier {
       final audioBase64 = data?['messageAudioBase64']?.toString() ??
           msg['messageAudioBase64']?.toString() ??
           data?['audioBase64']?.toString();
-      if (text.isNotEmpty) _speak(text, audioBase64: audioBase64);
+      if (text.isNotEmpty) {
+        // A replay only exists so the screen isn't stale: if it repeats the instruction the
+        // user just heard, update the state and stay silent.
+        final repeatsLast = transcript.isNotEmpty &&
+            transcript.last.sender == ChatSender.assistant &&
+            transcript.last.text == text;
+        if (msg['replay'] == true && repeatsLast) {
+          debugPrint("WS: replayed snapshot already said - staying silent");
+          return;
+        }
+        _speak(text, audioBase64: audioBase64);
+      }
       return;
     }
 
@@ -546,6 +745,20 @@ class VoiceViewModel extends ChangeNotifier {
 
   void _speak(String text, {String? audioBase64}) {
     if (!_active) return;
+
+    // Say the identical thing twice within a few seconds only when it is genuinely a new
+    // instruction; otherwise it is a duplicate frame (double push, second socket, replay) and
+    // the player from the first one is still running.
+    final now = DateTime.now();
+    if (text == _lastSpokenText &&
+        _lastSpokenAt != null &&
+        now.difference(_lastSpokenAt!) < const Duration(seconds: 8)) {
+      print("Assistant Speaking: suppressed duplicate");
+      return;
+    }
+    _lastSpokenText = text;
+    _lastSpokenAt = now;
+
     print("Assistant Speaking: $text");
 
     // UI Update
@@ -574,10 +787,15 @@ class VoiceViewModel extends ChangeNotifier {
   @override
   void dispose() {
     _voice.dispose();
+    _wsSub?.cancel();
+    _wsSub = null;
+    _wsConnSub?.cancel();
+    _wsConnSub = null;
+    _wsEpoch++;
     _ws?.dispose();
-    _stabilityTimer?.cancel();
-    _absoluteTimeoutTimer?.cancel();
+    _listenWindowTimer?.cancel();
     _heartbeatTimer?.cancel();
+    _sttRetryTimer?.cancel();
     super.dispose();
   }
 }
