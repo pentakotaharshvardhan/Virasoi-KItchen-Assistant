@@ -12,22 +12,20 @@ import '../helpers/fixtures.dart';
 
 void main() {
   late FakeRecipeService service;
-  late FakeAiService ai;
   late SecureStorage storage;
   late CreateRecipeViewModel vm;
 
   setUp(() {
     service = FakeRecipeService();
-    ai = FakeAiService();
     storage = SecureStorage.inMemory();
-    vm = CreateRecipeViewModel(
-        service: service, aiService: ai, storage: storage);
+    vm = CreateRecipeViewModel(service: service, storage: storage);
   });
 
-  Widget harness() => ChangeNotifierProvider<CreateRecipeViewModel>.value(
+  Widget harness({String? initialDishName}) =>
+      ChangeNotifierProvider<CreateRecipeViewModel>.value(
         value: vm,
         child: MaterialApp(
-          home: const CreateRecipePage(),
+          home: CreateRecipePage(initialDishName: initialDishName),
           onGenerateRoute: (settings) {
             if (settings.name == AppRoutes.ingredients) {
               return MaterialPageRoute(
@@ -60,6 +58,14 @@ void main() {
     expect(find.text('Generate Recipe'), findsOneWidget);
     expect(find.text('Stoves available (max 4)'), findsOneWidget);
     expect(find.text('Number of servings'), findsOneWidget);
+  });
+
+  testWidgets('a recipe detail route preselects its dish', (tester) async {
+    await tester.pumpWidget(harness(initialDishName: 'Paneer Tikka'));
+    await tester.pumpAndSettle();
+
+    expect(vm.selectedDishes, ['Paneer Tikka']);
+    expect(find.text('Paneer Tikka'), findsOneWidget);
   });
 
   testWidgets('adding a dish shows a removable chip', (tester) async {
@@ -188,16 +194,19 @@ void main() {
   });
 
   testWidgets('a debounced suggestion can be accepted', (tester) async {
-    ai.suggestionResult = const Success('Paneer Tikka');
+    await storage.saveSession(accessToken: 'jwt', userId: 'user-42');
+    service.listResult = Success([
+      sampleRecipe(id: 'owned', dishName: 'Paneer Tikka'),
+    ]);
     await tester.pumpWidget(harness());
     await tester.pumpAndSettle();
 
-    await tester.enterText(find.byType(TextFormField), 'pan');
-    await tester.pump(const Duration(milliseconds: 700));
+    await tester.enterText(find.byType(TextFormField), 'paner');
+    await tester.pump(const Duration(milliseconds: 260));
 
-    expect(find.text('Did you mean: Paneer Tikka?'), findsOneWidget);
+    expect(find.text('Paneer Tikka'), findsOneWidget);
 
-    await tester.tap(find.text('Did you mean: Paneer Tikka?'));
+    await tester.tap(find.text('Paneer Tikka'));
     await tester.pump();
 
     await tester.tap(find.text('Generate Recipe'));

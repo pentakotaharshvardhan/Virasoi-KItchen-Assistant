@@ -45,7 +45,7 @@ public class AuthService {
         user = appUserRepository.save(user);
 
         String token = jwtService.generateToken(user.getId(), user.getUsername());
-        return new AuthResponse(token, jwtService.expirationSeconds(), user.getId(), user.getUsername());
+        return new AuthResponse(token, jwtService.expirationSeconds(), user.getId(), user.getUsername(), user.getEmail());
     }
 
     public AuthResponse login(LoginRequest request) {
@@ -60,6 +60,6 @@ public class AuthService {
                 .orElseThrow(() -> new BadCredentialsException("Invalid username or password"));
 
         String token = jwtService.generateToken(user.getId(), user.getUsername());
-        return new AuthResponse(token, jwtService.expirationSeconds(), user.getId(), user.getUsername());
+        return new AuthResponse(token, jwtService.expirationSeconds(), user.getId(), user.getUsername(), user.getEmail());
     }
 }

@@ -13,7 +13,8 @@ class LoginPage extends StatefulWidget {
   State<LoginPage> createState() => _LoginPageState();
 }
 
-class _LoginPageState extends State<LoginPage> with SingleTickerProviderStateMixin {
+class _LoginPageState extends State<LoginPage>
+    with SingleTickerProviderStateMixin {
   final _formKey = GlobalKey<FormState>();
   final _username = TextEditingController();
   final _password = TextEditingController();
@@ -23,7 +24,9 @@ class _LoginPageState extends State<LoginPage> with SingleTickerProviderStateMix
   @override
   void initState() {
     super.initState();
-    _fadeController = AnimationController(vsync: this, duration: const Duration(milliseconds: 700))..forward();
+    _fadeController = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 700))
+      ..forward();
   }
 
   @override
@@ -41,7 +44,8 @@ class _LoginPageState extends State<LoginPage> with SingleTickerProviderStateMix
     if (ok && mounted) {
       Navigator.pushNamedAndRemoveUntil(context, AppRoutes.home, (r) => false);
     } else if (mounted && vm.errorMessage != null) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(vm.errorMessage!)));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(vm.errorMessage!)));
     }
   }
 
@@ -58,14 +62,21 @@ class _LoginPageState extends State<LoginPage> with SingleTickerProviderStateMix
               child: FadeTransition(
                 opacity: _fadeController,
                 child: SlideTransition(
-                  position: Tween<Offset>(begin: const Offset(0, 0.06), end: Offset.zero)
-                      .animate(CurvedAnimation(parent: _fadeController, curve: Curves.easeOutCubic)),
+                  position: Tween<Offset>(
+                          begin: const Offset(0, 0.06), end: Offset.zero)
+                      .animate(CurvedAnimation(
+                          parent: _fadeController, curve: Curves.easeOutCubic)),
                   child: Container(
                     padding: const EdgeInsets.all(28),
                     decoration: BoxDecoration(
                       color: AppColors.surface,
                       borderRadius: BorderRadius.circular(28),
-                      boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.4), blurRadius: 40, offset: const Offset(0, 20))],
+                      boxShadow: [
+                        BoxShadow(
+                            color: Colors.black.withOpacity(0.4),
+                            blurRadius: 40,
+                            offset: const Offset(0, 20))
+                      ],
                     ),
                     child: Form(
                       key: _formKey,
@@ -79,21 +90,29 @@ class _LoginPageState extends State<LoginPage> with SingleTickerProviderStateMix
                               height: 64,
                               width: 64,
                               alignment: Alignment.center,
-                              decoration: const BoxDecoration(gradient: AppColors.primaryGradient, shape: BoxShape.circle),
-                              child: const Icon(Icons.soup_kitchen_rounded, color: Colors.black, size: 32),
+                              decoration: const BoxDecoration(
+                                  gradient: AppColors.primaryGradient,
+                                  shape: BoxShape.circle),
+                              child: const Icon(Icons.soup_kitchen_rounded,
+                                  color: Colors.black, size: 32),
                             ),
                           ),
                           const SizedBox(height: 18),
-                          const Text('Welcome back', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
+                          const Text('Welcome back',
+                              style: TextStyle(
+                                  fontSize: 24, fontWeight: FontWeight.w800)),
                           const SizedBox(height: 6),
-                          const Text('Sign in to your kitchen assistant', style: TextStyle(color: AppColors.textSecondary)),
+                          const Text('Sign in to your kitchen assistant',
+                              style: TextStyle(color: AppColors.textSecondary)),
                           const SizedBox(height: 28),
                           AppTextField(
                             controller: _username,
                             label: 'Username',
                             icon: Icons.person_outline_rounded,
                             keyboardType: TextInputType.text,
-                            validator: (v) => (v == null || v.isEmpty) ? 'Enter a username' : null,
+                            validator: (v) => (v == null || v.isEmpty)
+                                ? 'Enter a username'
+                                : null,
                           ),
                           const SizedBox(height: 14),
                           AppTextField(
@@ -101,21 +120,34 @@ class _LoginPageState extends State<LoginPage> with SingleTickerProviderStateMix
                             label: 'Password',
                             icon: Icons.lock_outline_rounded,
                             obscureText: _obscure,
-                            validator: (v) => (v == null || v.length < 6) ? 'Min. 6 characters' : null,
+                            validator: (v) => (v == null || v.length < 6)
+                                ? 'Min. 6 characters'
+                                : null,
                             suffix: IconButton(
-                              icon: Icon(_obscure ? Icons.visibility_off_outlined : Icons.visibility_outlined, size: 20),
-                              onPressed: () => setState(() => _obscure = !_obscure),
+                              icon: Icon(
+                                  _obscure
+                                      ? Icons.visibility_off_outlined
+                                      : Icons.visibility_outlined,
+                                  size: 20),
+                              onPressed: () =>
+                                  setState(() => _obscure = !_obscure),
                             ),
                           ),
                           const SizedBox(height: 26),
-                          GradientButton(label: 'Log In', isLoading: vm.isLoading, onPressed: _submit),
+                          GradientButton(
+                              label: 'Log In',
+                              isLoading: vm.isLoading,
+                              onPressed: _submit),
                           const SizedBox(height: 18),
                           Row(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
-                              const Text("Don't have an account?", style: TextStyle(color: AppColors.textSecondary)),
+                              const Text("Don't have an account?",
+                                  style: TextStyle(
+                                      color: AppColors.textSecondary)),
                               TextButton(
-                                onPressed: () => Navigator.pushNamed(context, AppRoutes.register),
+                                onPressed: () => Navigator.pushNamed(
+                                    context, AppRoutes.register),
                                 child: const Text('Register'),
                               ),
                             ],

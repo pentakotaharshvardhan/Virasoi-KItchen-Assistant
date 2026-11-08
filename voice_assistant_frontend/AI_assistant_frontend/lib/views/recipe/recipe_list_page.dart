@@ -18,42 +18,66 @@ class _RecipeListPageState extends State<RecipeListPage> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => context.read<RecipeListViewModel>().load());
+    WidgetsBinding.instance.addPostFrameCallback(
+        (_) => context.read<RecipeListViewModel>().load());
   }
 
   void _openSortSheet(BuildContext context) {
     final vm = context.read<RecipeListViewModel>();
     showModalBottomSheet(
       context: context,
+      isScrollControlled: true,
       backgroundColor: AppColors.surface,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
       builder: (_) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 12),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(width: 40, height: 4, decoration: BoxDecoration(color: AppColors.divider, borderRadius: BorderRadius.circular(4))),
-              const SizedBox(height: 16),
-              const Text('Sort recipes by', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
-              const SizedBox(height: 8),
-              _sortTile(context, 'Time added (oldest first)', RecipeSortOption.timeAsc, vm),
-              _sortTile(context, 'Time added (newest first)', RecipeSortOption.timeDesc, vm),
-              _sortTile(context, 'Alphabetical (A-Z)', RecipeSortOption.alphabetical, vm),
-              _sortTile(context, 'Total time required', RecipeSortOption.totalTime, vm),
-              const SizedBox(height: 12),
-            ],
+        child: SingleChildScrollView(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                        color: AppColors.divider,
+                        borderRadius: BorderRadius.circular(4))),
+                const SizedBox(height: 16),
+                const Text('Sort recipes by',
+                    style:
+                        TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+                const SizedBox(height: 8),
+                _sortTile(context, 'Time added (oldest first)',
+                    RecipeSortOption.timeAsc, vm),
+                _sortTile(context, 'Time added (newest first)',
+                    RecipeSortOption.timeDesc, vm),
+                _sortTile(context, 'Alphabetical (A-Z)',
+                    RecipeSortOption.alphabetical, vm),
+                _sortTile(context, 'Alphabetical (Z-A)',
+                    RecipeSortOption.alphabeticalDesc, vm),
+                _sortTile(context, 'Total time required',
+                    RecipeSortOption.totalTime, vm),
+                const SizedBox(height: 12),
+              ],
+            ),
           ),
         ),
       ),
     );
   }
 
-  Widget _sortTile(BuildContext context, String label, RecipeSortOption option, RecipeListViewModel vm) {
+  Widget _sortTile(BuildContext context, String label, RecipeSortOption option,
+      RecipeListViewModel vm) {
     final selected = vm.sort == option;
     return ListTile(
-      title: Text(label, style: TextStyle(color: selected ? AppColors.primary : AppColors.textPrimary, fontWeight: selected ? FontWeight.w700 : FontWeight.w400)),
-      trailing: selected ? const Icon(Icons.check_rounded, color: AppColors.primary) : null,
+      title: Text(label,
+          style: TextStyle(
+              color: selected ? AppColors.primary : AppColors.textPrimary,
+              fontWeight: selected ? FontWeight.w700 : FontWeight.w400)),
+      trailing: selected
+          ? const Icon(Icons.check_rounded, color: AppColors.primary)
+          : null,
       onTap: () {
         vm.changeSort(option);
         Navigator.pop(context);
@@ -66,7 +90,8 @@ class _RecipeListPageState extends State<RecipeListPage> {
     final vm = context.watch<RecipeListViewModel>();
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Your Recipes', style: TextStyle(fontWeight: FontWeight.w800)),
+        title: const Text('Your Recipes',
+            style: TextStyle(fontWeight: FontWeight.w800)),
         centerTitle: false,
         elevation: 0,
       ),
@@ -91,13 +116,18 @@ class _RecipeListPageState extends State<RecipeListPage> {
                             ),
                             child: TextField(
                               onChanged: vm.search,
-                              style: const TextStyle(color: Colors.white, fontSize: 14),
+                              style: const TextStyle(
+                                  color: Colors.white, fontSize: 14),
                               decoration: InputDecoration(
                                 hintText: 'Search recipes...',
-                                hintStyle: TextStyle(color: AppColors.textMuted.withOpacity(0.7)),
-                                prefixIcon: const Icon(Icons.search_rounded, size: 18, color: AppColors.primary),
+                                hintStyle: TextStyle(
+                                    color:
+                                        AppColors.textMuted.withOpacity(0.7)),
+                                prefixIcon: const Icon(Icons.search_rounded,
+                                    size: 18, color: AppColors.primary),
                                 border: InputBorder.none,
-                                contentPadding: const EdgeInsets.symmetric(vertical: 12),
+                                contentPadding:
+                                    const EdgeInsets.symmetric(vertical: 12),
                               ),
                             ),
                           ),
@@ -111,12 +141,17 @@ class _RecipeListPageState extends State<RecipeListPage> {
                             width: 48,
                             decoration: BoxDecoration(
                               gradient: LinearGradient(
-                                colors: [AppColors.surfaceElevated, AppColors.surfaceCard.withOpacity(0.5)],
+                                colors: [
+                                  AppColors.surfaceElevated,
+                                  AppColors.surfaceCard.withOpacity(0.5)
+                                ],
                               ),
                               borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: AppColors.divider, width: 1),
+                              border: Border.all(
+                                  color: AppColors.divider, width: 1),
                             ),
-                            child: const Icon(Icons.tune_rounded, size: 20, color: AppColors.textPrimary),
+                            child: const Icon(Icons.tune_rounded,
+                                size: 20, color: AppColors.textPrimary),
                           ),
                         ),
                       ],
@@ -155,9 +190,12 @@ class _RecipeListPageState extends State<RecipeListPage> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.wifi_off_rounded, color: AppColors.textMuted, size: 40),
+            const Icon(Icons.wifi_off_rounded,
+                color: AppColors.textMuted, size: 40),
             const SizedBox(height: 10),
-            Text(vm.errorMessage ?? 'Something went wrong', textAlign: TextAlign.center, style: const TextStyle(color: AppColors.textSecondary)),
+            Text(vm.errorMessage ?? 'Something went wrong',
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: AppColors.textSecondary)),
             const SizedBox(height: 14),
             OutlinedButton(onPressed: vm.load, child: const Text('Retry')),
           ],
@@ -165,7 +203,9 @@ class _RecipeListPageState extends State<RecipeListPage> {
       );
     }
     if (vm.visible.isEmpty) {
-      return const Center(child: Text('No recipes yet — tap Create to generate one!', style: TextStyle(color: AppColors.textSecondary)));
+      return const Center(
+          child: Text('No recipes yet — tap Create to generate one!',
+              style: TextStyle(color: AppColors.textSecondary)));
     }
     return RefreshIndicator(
       onRefresh: vm.load,
@@ -178,7 +218,8 @@ class _RecipeListPageState extends State<RecipeListPage> {
           final recipe = vm.visible[i];
           return RecipeCard(
             recipe: recipe,
-            onTap: () => Navigator.pushNamed(context, AppRoutes.recipeDetail, arguments: recipe.id),
+            onTap: () => Navigator.pushNamed(context, AppRoutes.recipeDetail,
+                arguments: recipe.id),
           );
         },
       ),

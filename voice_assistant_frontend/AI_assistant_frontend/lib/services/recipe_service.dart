@@ -3,7 +3,13 @@ import '../core/network/api_client.dart';
 import '../core/utils/result.dart';
 import '../models/recipe_model.dart';
 
-enum RecipeSortOption { timeAsc, timeDesc, alphabetical, totalTime }
+enum RecipeSortOption {
+  timeAsc,
+  timeDesc,
+  alphabetical,
+  alphabeticalDesc,
+  totalTime,
+}
 
 class RecipeService {
   RecipeService({ApiClient? api}) : _api = api ?? ApiClient.instance;
@@ -97,10 +103,31 @@ class RecipeService {
     };
   }
 
+  Future<Result<RecipeModel>> uploadAncestorRecipe({
+    required String transcriptText,
+    String? dishNameHint,
+    String? createdBy,
+    required String userId,
+  }) async {
+    final res = await _api.post(ApiConstants.ancestorRecipe, body: {
+      'transcriptText': transcriptText,
+      if (dishNameHint != null && dishNameHint.isNotEmpty)
+        'dishNameHint': dishNameHint,
+      if (createdBy != null && createdBy.isNotEmpty) 'createdBy': createdBy,
+      'userId': userId,
+    });
+    return switch (res) {
+      Success(data: final data) =>
+        Success(RecipeModel.fromJson(data as Map<String, dynamic>)),
+      Failure(message: final message) => Failure(message),
+    };
+  }
+
   String _sortParam(RecipeSortOption s) => switch (s) {
         RecipeSortOption.timeAsc => 'time_asc',
         RecipeSortOption.timeDesc => 'time_desc',
         RecipeSortOption.alphabetical => 'alphabetical',
+        RecipeSortOption.alphabeticalDesc => 'alphabetical_desc',
         RecipeSortOption.totalTime => 'total_time',
       };
 }

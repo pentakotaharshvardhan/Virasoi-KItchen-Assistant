@@ -5,12 +5,17 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   test('loadUser reads the stored display name', () async {
     final storage = SecureStorage.inMemory();
-    await storage.saveSession(accessToken: 't', userName: 'Harsh Chef');
+    await storage.saveSession(
+      accessToken: 't',
+      userName: 'Harsh Chef',
+      userEmail: 'harsh@example.com',
+    );
     final vm = HomeViewModel(storage: storage);
 
     await vm.loadUser();
 
     expect(vm.userName, 'Harsh Chef');
+    expect(vm.userEmail, 'harsh@example.com');
   });
 
   test('loadUser falls back to Chef when nothing is stored', () async {

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:ai_assistant_frontend/core/network/api_client.dart';
 import 'package:ai_assistant_frontend/core/utils/result.dart';
@@ -135,6 +136,32 @@ void main() {
       final result = await AiService(api: api).askHelp('What can you do?');
 
       expect((result as Success<String>).data, 'Ask me to remove ingredients.');
+    });
+
+    test('contextual help only serializes a screenshot when supplied',
+        () async {
+      final requestBodies = <Map<String, dynamic>>[];
+      final api = ApiClient.withClient(MockClient((request) async {
+        expect(request.url.path, '/api/ai/helper');
+        requestBodies.add(jsonDecode(request.body) as Map<String, dynamic>);
+        return jsonResponse({'answer': 'Try tapping Create.'});
+      }));
+      final service = AiService(api: api);
+
+      await service.askContextualHelp(
+        question: 'Where do I start?',
+        screenName: 'Home',
+      );
+      await service.askContextualHelp(
+        question: 'What does this screen show?',
+        screenName: 'Home',
+        screenSummary: 'The recipe collection.',
+        screenshot: Uint8List.fromList([1, 2, 3]),
+      );
+
+      expect(requestBodies[0].containsKey('screenshot'), isFalse);
+      expect(requestBodies[1]['screenSummary'], 'The recipe collection.');
+      expect(requestBodies[1]['screenshot'], base64Encode([1, 2, 3]));
     });
 
     test('getHelpCommands parses a list of examples', () async {

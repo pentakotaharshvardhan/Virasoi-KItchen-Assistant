@@ -70,6 +70,7 @@ class ApiConstants {
   static const String aiCommand = '/api/ai/command';
   static const String aiPersonalize = '/api/ai/personalize-instruction';
   static const String aiHelp = '/api/ai/help';
+  static const String aiHelper = '/api/ai/helper';
   static const String aiHelpCommands = '/api/ai/help/commands';
 
   // ---------------------------------------------------------------------

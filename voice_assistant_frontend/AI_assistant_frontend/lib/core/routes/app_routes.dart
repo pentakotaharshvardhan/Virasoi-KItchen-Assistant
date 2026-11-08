@@ -10,4 +10,7 @@ class AppRoutes {
   static const voiceAssistant = '/voice';
   static const settings = '/settings';
   static const help = '/help';
+  static const appGuide = '/app-guide';
+  static const creationChoices = '/creation-choices';
+  static const ancestorRecipe = '/ancestor-recipe';
 }

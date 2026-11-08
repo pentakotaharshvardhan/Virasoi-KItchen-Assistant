@@ -7,7 +7,8 @@ import '../../widgets/app_text_field.dart';
 import '../../widgets/gradient_button.dart';
 
 class CreateRecipePage extends StatefulWidget {
-  const CreateRecipePage({super.key});
+  final String? initialDishName;
+  const CreateRecipePage({super.key, this.initialDishName});
 
   @override
   State<CreateRecipePage> createState() => _CreateRecipePageState();
@@ -25,6 +26,7 @@ class _CreateRecipePageState extends State<CreateRecipePage> {
       final vm = context.read<CreateRecipeViewModel>();
       vm.init().then((_) {
         if (mounted) {
+          vm.beginDraft(initialDishName: widget.initialDishName);
           setState(() {
             _stoves = vm.stoves;
             _servings = vm.servings;
@@ -37,6 +39,12 @@ class _CreateRecipePageState extends State<CreateRecipePage> {
           .read<CreateRecipeViewModel>()
           .onDishNameChanged(_dishController.text);
     });
+  }
+
+  @override
+  void dispose() {
+    _dishController.dispose();
+    super.dispose();
   }
 
   void _addDish() {
@@ -131,23 +139,44 @@ class _CreateRecipePageState extends State<CreateRecipePage> {
                       ),
                       onFieldSubmitted: (_) => _addDish(),
                     ),
-                    if (vm.suggestedDishName.isNotEmpty &&
-                        vm.suggestedDishName != _dishController.text)
+                    if (vm.suggestedRecipes.isNotEmpty)
                       Padding(
-                        padding: const EdgeInsets.only(top: 8, left: 4),
-                        child: InkWell(
-                          onTap: () {
-                            _dishController.text = vm.suggestedDishName;
-                            _dishController.selection =
-                                TextSelection.fromPosition(TextPosition(
-                                    offset: _dishController.text.length));
-                          },
-                          child: Text(
-                            'Did you mean: ${vm.suggestedDishName}?',
-                            style: const TextStyle(
-                                color: AppColors.primary,
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600),
+                        padding: const EdgeInsets.only(top: 10),
+                        child: Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: AppColors.surfaceCard,
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'Recipes from your collection',
+                                style: TextStyle(
+                                  color: AppColors.textSecondary,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              ...vm.suggestedRecipes.map(
+                                (recipe) => ListTile(
+                                  dense: true,
+                                  contentPadding: EdgeInsets.zero,
+                                  leading: const Icon(
+                                    Icons.restaurant_menu_rounded,
+                                    color: AppColors.primary,
+                                  ),
+                                  title: Text(recipe.dishName),
+                                  onTap: () {
+                                    vm.selectSuggestedRecipe(recipe);
+                                    _dishController.clear();
+                                    FocusScope.of(context).unfocus();
+                                  },
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       ),

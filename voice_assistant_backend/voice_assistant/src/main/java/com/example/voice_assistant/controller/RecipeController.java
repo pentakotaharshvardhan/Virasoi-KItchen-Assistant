@@ -5,9 +5,12 @@ import com.example.voice_assistant.dto.request.GenerateRecipeBatchRequest;
 import com.example.voice_assistant.dto.request.GenerateRecipeRequest;
 import com.example.voice_assistant.entity.Recipe;
 import com.example.voice_assistant.exception.ResourceNotFoundException;
+import com.example.voice_assistant.security.AppUserDetails;
 import com.example.voice_assistant.service.RecipeService;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -29,13 +32,16 @@ public class RecipeController {
     }
 
     @GetMapping
-    public List<Recipe> listAll() {
-        return recipeService.listAll();
+    public List<Recipe> listAll(Authentication authentication) {
+        return recipeService.listByUserId(authenticatedUserId(authentication));
     }
 
     /** Recipes added by one user only (the app's recipe list screen uses this). */
     @GetMapping("/user/{userId}")
-    public List<Recipe> listByUser(@PathVariable String userId) {
+    public List<Recipe> listByUser(@PathVariable String userId, Authentication authentication) {
+        if (!authenticatedUserId(authentication).equals(userId)) {
+            throw new AccessDeniedException("Recipes can only be listed for the signed-in user.");
+        }
         return recipeService.listByUserId(userId);
     }
 
@@ -52,14 +58,16 @@ public class RecipeController {
 
     /** find-or-generate: looks the dish up, and if it's missing, asks the AI to create + save it on the spot. */
     @PostMapping("/find-or-generate")
-    public Recipe findOrGenerate(@Valid @RequestBody GenerateRecipeRequest request) {
-        return recipeService.findOrGenerate(request.getDishName(), request.getUserId());
+    public Recipe findOrGenerate(
+            @Valid @RequestBody GenerateRecipeRequest request, Authentication authentication) {
+        return recipeService.findOrGenerate(request.getDishName(), authenticatedUserId(authentication));
     }
 
     /** Forces a fresh AI-generated recipe even if one already exists (e.g. user wants a different variation). */
     @PostMapping("/generate")
-    public Recipe generate(@Valid @RequestBody GenerateRecipeRequest request) {
-        return recipeService.generateAndSaveRecipe(request.getDishName(), request.getUserId());
+    public Recipe generate(
+            @Valid @RequestBody GenerateRecipeRequest request, Authentication authentication) {
+        return recipeService.generateAndSaveRecipe(request.getDishName(), authenticatedUserId(authentication));
     }
 
     /**
@@ -68,15 +76,25 @@ public class RecipeController {
      * recipe per dish. Every recipe is saved individually.
      */
     @PostMapping("/generate-batch")
-    public List<Recipe> generateBatch(@Valid @RequestBody GenerateRecipeBatchRequest request) {
-        return recipeService.generateOrReuseRecipes(request.getDishNames(), request.getUserId());
+    public List<Recipe> generateBatch(
+            @Valid @RequestBody GenerateRecipeBatchRequest request, Authentication authentication) {
+        return recipeService.generateOrReuseRecipes(
+                request.getDishNames(), authenticatedUserId(authentication));
     }
 
     /** REST fallback for uploading an ancestor recipe from already-transcribed text. */
     @PostMapping("/ancestor")
-    public ResponseEntity<Recipe> uploadAncestorRecipe(@Valid @RequestBody AncestorRecipeUploadRequest request) {
+    public ResponseEntity<Recipe> uploadAncestorRecipe(
+            @Valid @RequestBody AncestorRecipeUploadRequest request, Authentication authentication) {
         Recipe saved = recipeService.uploadAncestorRecipe(
-                request.getTranscriptText(), request.getDishNameHint(), request.getCreatedBy(), request.getUserId());
+                request.getTranscriptText(), request.getDishNameHint(), request.getCreatedBy(),
+                authenticatedUserId(authentication));
         return ResponseEntity.ok(saved);
+    }
+
+    private String authenticatedUserId(Authentication authentication) {
+        Object principal = authentication == null ? null : authentication.getPrincipal();
+        if (principal instanceof AppUserDetails user) return user.getId().toString();
+        throw new AccessDeniedException("A signed-in user is required.");
     }
 }

@@ -1,10 +1,10 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../core/utils/result.dart';
 import '../core/utils/secure_storage.dart';
 import '../models/recipe_model.dart';
 import '../services/recipe_service.dart';
-import '../services/ai_service.dart';
 
 class CreateRecipeViewModel extends ChangeNotifier {
   static const int maxStoves = 4;
@@ -12,26 +12,27 @@ class CreateRecipeViewModel extends ChangeNotifier {
 
   CreateRecipeViewModel({
     RecipeService? service,
-    AiService? aiService,
     SecureStorage? storage,
   })  : _service = service ?? RecipeService(),
-        _ai = aiService ?? AiService(),
         _storage = storage ?? SecureStorage.instance;
 
   final RecipeService _service;
-  final AiService _ai;
   final SecureStorage _storage;
 
   bool isSubmitting = false;
   String? errorMessage;
   List<RecipeModel> generated = [];
+  List<RecipeModel> suggestedRecipes = [];
 
   List<String> selectedDishes = [];
-  String suggestedDishName = '';
   int stoves = 1;
   int servings = 2;
 
   Timer? _suggestTimer;
+  List<RecipeModel> _userRecipes = [];
+
+  String get suggestedDishName =>
+      suggestedRecipes.isEmpty ? '' : suggestedRecipes.first.dishName;
 
   Future<void> init() async {
     final storedStoveCount = await _storage.stoveCount;
@@ -41,23 +42,45 @@ class CreateRecipeViewModel extends ChangeNotifier {
             ? maxStoves
             : storedStoveCount;
     servings = await _storage.servingCount;
+    final userId = await _storage.userId;
+    if (userId != null && userId.isNotEmpty) {
+      final result = await _service.getRecipesByUserId(userId);
+      if (result case Success(data: final recipes)) {
+        _userRecipes = recipes;
+      }
+    }
     notifyListeners();
+  }
+
+  void beginDraft({String? initialDishName}) {
+    _suggestTimer?.cancel();
+    selectedDishes = [];
+    suggestedRecipes = [];
+    generated = [];
+    errorMessage = null;
+    final initial = initialDishName?.trim();
+    if (initial != null && initial.isNotEmpty) {
+      addDish(initial);
+    } else {
+      notifyListeners();
+    }
   }
 
   bool addDish(String name) {
     final clean = name.trim();
     if (clean.isEmpty) return false;
-    if (selectedDishes.contains(clean)) return true;
+    if (selectedDishes.any((dish) => dish.toLowerCase() == clean.toLowerCase()))
+      return true;
     if (selectedDishes.length >= maxDishes) {
       _suggestTimer?.cancel();
-      suggestedDishName = '';
+      suggestedRecipes = [];
       errorMessage = 'You can add up to $maxDishes dishes.';
       notifyListeners();
       return false;
     }
 
     selectedDishes.add(clean);
-    suggestedDishName = '';
+    suggestedRecipes = [];
     errorMessage = null;
     notifyListeners();
     return true;
@@ -70,19 +93,72 @@ class CreateRecipeViewModel extends ChangeNotifier {
 
   void onDishNameChanged(String value) {
     _suggestTimer?.cancel();
-    if (value.length < 3) {
-      suggestedDishName = '';
-      notifyListeners();
+    suggestedRecipes = [];
+    notifyListeners();
+    final query = _normalizeDish(value);
+    if (query.length < 3) {
       return;
     }
 
-    _suggestTimer = Timer(const Duration(milliseconds: 600), () async {
-      final res = await _ai.suggestDishName(value);
-      if (res is Success<String>) {
-        suggestedDishName = res.data;
-        notifyListeners();
-      }
+    _suggestTimer = Timer(const Duration(milliseconds: 250), () {
+      final matches = _userRecipes
+          .map((recipe) => (
+                recipe: recipe,
+                distance: _bestNameDistance(query, recipe.dishName),
+              ))
+          .where((match) => match.distance <= math.max(1, query.length ~/ 4))
+          .toList()
+        ..sort((a, b) {
+          final score = a.distance.compareTo(b.distance);
+          return score != 0
+              ? score
+              : a.recipe.dishName
+                  .toLowerCase()
+                  .compareTo(b.recipe.dishName.toLowerCase());
+        });
+      suggestedRecipes =
+          matches.take(5).map((match) => match.recipe).toList(growable: false);
+      notifyListeners();
     });
+  }
+
+  void selectSuggestedRecipe(RecipeModel recipe) {
+    addDish(recipe.dishName);
+  }
+
+  static String _normalizeDish(String value) =>
+      value.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+
+  static int _bestNameDistance(String query, String dishName) {
+    final normalizedDish = _normalizeDish(dishName);
+    if (normalizedDish.contains(query)) return 0;
+    final words = dishName
+        .toLowerCase()
+        .split(RegExp(r'[^a-z0-9]+'))
+        .where((word) => word.isNotEmpty);
+    var best = _editDistance(query, normalizedDish);
+    for (final word in words) {
+      best = math.min(best, _editDistance(query, word));
+    }
+    return best;
+  }
+
+  static int _editDistance(String left, String right) {
+    if (left.isEmpty) return right.length;
+    if (right.isEmpty) return left.length;
+    var previous = List<int>.generate(right.length + 1, (i) => i);
+    for (var i = 1; i <= left.length; i++) {
+      final current = List<int>.filled(right.length + 1, 0)..[0] = i;
+      for (var j = 1; j <= right.length; j++) {
+        final substitutionCost = left[i - 1] == right[j - 1] ? 0 : 1;
+        current[j] = math.min(
+          math.min(current[j - 1] + 1, previous[j] + 1),
+          previous[j - 1] + substitutionCost,
+        );
+      }
+      previous = current;
+    }
+    return previous.last;
   }
 
   Future<bool> submit(

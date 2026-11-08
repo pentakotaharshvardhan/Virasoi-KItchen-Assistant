@@ -25,6 +25,7 @@ class SecureStorage {
   static const _keyRefreshToken = 'refresh_token';
   static const _keyUserName = 'user_name';
   static const _keyUserUsername = 'user_username';
+  static const _keyUserEmail = 'user_email';
   static const _keyUserId = 'user_id';
   static const _keyStoveCount = 'stove_count';
   static const _keyServingCount = 'serving_count';
@@ -51,16 +52,19 @@ class SecureStorage {
     String? refreshToken,
     String? userName,
     String? userUsername,
+    String? userEmail,
     String? userId,
   }) async {
     await _write(_keyAccessToken, accessToken);
     if (refreshToken != null) await _write(_keyRefreshToken, refreshToken);
     if (userName != null) await _write(_keyUserName, userName);
     if (userUsername != null) await _write(_keyUserUsername, userUsername);
+    if (userEmail != null) await _write(_keyUserEmail, userEmail);
     if (userId != null) await _write(_keyUserId, userId);
   }
 
-  Future<void> saveSettings({required int stoves, required int servings}) async {
+  Future<void> saveSettings(
+      {required int stoves, required int servings}) async {
     await _write(_keyStoveCount, stoves.toString());
     await _write(_keyServingCount, servings.toString());
   }
@@ -69,9 +73,12 @@ class SecureStorage {
   Future<String?> get refreshToken => _read(_keyRefreshToken);
   Future<String?> get userName => _read(_keyUserName);
   Future<String?> get userUsername => _read(_keyUserUsername);
+  Future<String?> get userEmail => _read(_keyUserEmail);
   Future<String?> get userId => _read(_keyUserId);
-  Future<int> get stoveCount async => int.tryParse(await _read(_keyStoveCount) ?? '1') ?? 1;
-  Future<int> get servingCount async => int.tryParse(await _read(_keyServingCount) ?? '2') ?? 2;
+  Future<int> get stoveCount async =>
+      int.tryParse(await _read(_keyStoveCount) ?? '1') ?? 1;
+  Future<int> get servingCount async =>
+      int.tryParse(await _read(_keyServingCount) ?? '2') ?? 2;
 
   Future<void> clear() async {
     if (_storage == null) {

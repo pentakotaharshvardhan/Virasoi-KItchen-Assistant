@@ -5,6 +5,7 @@ import 'package:ai_assistant_frontend/view_models/recipe_list_viewmodel.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../helpers/fakes.dart';
+import '../helpers/fixtures.dart';
 
 void main() {
   late FakeRecipeService service;
@@ -85,6 +86,32 @@ void main() {
       'Chicken Biryani',
       'Paneer Butter Masala',
     ]);
+  });
+
+  test('reverse alphabetical sort is supported', () async {
+    await vm.load();
+
+    vm.changeSort(RecipeSortOption.alphabeticalDesc);
+
+    expect(vm.visible.map((r) => r.dishName), [
+      'Paneer Butter Masala',
+      'Chicken Biryani',
+      'Aloo Gobi',
+    ]);
+  });
+
+  test('origin filter separates ancestor and AI recipes', () async {
+    service.listResult = Success([
+      sampleRecipe(id: 'ancestor', dishName: 'Family Dal', source: 'ANCESTOR'),
+      sampleRecipe(id: 'ai', dishName: 'AI Dal', source: 'AI_GENERATED'),
+    ]);
+    await vm.load();
+
+    vm.changeOriginFilter(RecipeOriginFilter.ancestor);
+    expect(vm.visible.map((r) => r.id), ['ancestor']);
+
+    vm.changeOriginFilter(RecipeOriginFilter.aiGenerated);
+    expect(vm.visible.map((r) => r.id), ['ai']);
   });
 
   test('total time sort puts the quickest recipe first', () async {

@@ -70,6 +70,7 @@ void main() {
       RecipeSortOption.timeAsc: 'time_asc',
       RecipeSortOption.timeDesc: 'time_desc',
       RecipeSortOption.alphabetical: 'alphabetical',
+      RecipeSortOption.alphabeticalDesc: 'alphabetical_desc',
       RecipeSortOption.totalTime: 'total_time',
     };
 

@@ -32,7 +32,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
 
     expect(find.textContaining('Hey, Harsh'), findsOneWidget);
-    expect(find.text('What you can do'), findsOneWidget);
+    expect(find.text('Your Recipes'), findsOneWidget);
 
     // Unmount so the home screen's looping animations stop.
     await tester.pumpWidget(const SizedBox());

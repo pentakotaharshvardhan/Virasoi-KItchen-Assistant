@@ -53,6 +53,13 @@ public class AiAssistController {
         return Map.of("answer", voiceCommandService.answerHelpQuestion(request.question));
     }
 
+    /** One-shot contextual help. Requests and optional screenshots are not persisted. */
+    @PostMapping("/api/ai/helper")
+    public Map<String, String> contextualHelp(@Valid @RequestBody ContextualHelpRequest request) {
+        return Map.of("answer", voiceCommandService.answerContextualHelp(
+                request.question, request.screenName, request.screenSummary, request.screenshot));
+    }
+
     /** Reference list of example phrases per command, so the Help screen can show users exactly
      *  what to say instead of hardcoding a second copy of the list in Flutter. */
     @GetMapping("/api/ai/help/commands")
@@ -81,6 +88,21 @@ public class AiAssistController {
     public static class HelpQuestionRequest {
         @NotBlank
         public String question;
+    }
+
+    public static class ContextualHelpRequest {
+        @NotBlank
+        @Size(max = 600)
+        public String question;
+
+        @Size(max = 80)
+        public String screenName;
+
+        @Size(max = 1000)
+        public String screenSummary;
+
+        @Size(max = 2_000_000)
+        public byte[] screenshot;
     }
 }
 

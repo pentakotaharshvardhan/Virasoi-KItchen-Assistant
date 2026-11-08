@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../core/constants/app_colors.dart';
 import '../../core/routes/app_routes.dart';
+import '../../services/helper_assistant_launcher.dart';
 import '../../services/voice_service.dart';
 import '../../view_models/ingredient_viewmodel.dart';
 import '../../view_models/voice_viewmodel.dart';
@@ -42,6 +43,7 @@ class _IngredientPageState extends State<IngredientPage>
         _voiceVm.onRemainingItemsRequest = () async => _vm.remainingNames;
         _voiceVm.onIngredientsRemoved = _onIngredientsRemovedByVoice;
         _voiceVm.onAvailableIngredients = () async => _vm.remainingNames;
+        _voiceVm.onHelpRequested = _openHelpAssistant;
         await _voiceVm.init(_vm.sessionId);
       }
     });
@@ -64,6 +66,7 @@ class _IngredientPageState extends State<IngredientPage>
     _voiceVm.onRemainingItemsRequest = null;
     _voiceVm.onIngredientsRemoved = null;
     _voiceVm.onAvailableIngredients = null;
+    _voiceVm.onHelpRequested = null;
     // The cooking screen owns the mic after a hand-off; otherwise release it on the way out.
     if (!_handingOff) {
       _voiceVm.detach();
@@ -136,15 +139,12 @@ class _IngredientPageState extends State<IngredientPage>
   Future<void> _openHelpAssistant() async {
     await _voiceVm.pause();
     if (!mounted) return;
-    await Navigator.pushNamed(
+    await HelperAssistantLauncher.open(
       context,
-      AppRoutes.voiceAssistant,
-      arguments: {'sessionId': _vm.sessionId, 'helpMode': true},
+      screenName: 'Gather Ingredients',
     );
-    // Let the helper route finish disposing (it detaches the shared voice VM) before restarting.
-    await Future.delayed(const Duration(milliseconds: 450));
     if (!mounted) return;
-    await _voiceVm.init(_vm.sessionId);
+    await _voiceVm.startListening();
   }
 
   @override
@@ -261,17 +261,9 @@ class _IngredientPageState extends State<IngredientPage>
                           ? 'Start cooking'
                           : 'Continue to cooking (${vm.pending.length} left)',
                       icon: Icons.soup_kitchen_rounded,
-                      onPressed:
-                          (_navigating || _handingOff || vm.isLoading)
-                              ? null
-                              : _goToCooking,
-                    ),
-                    const SizedBox(height: 12),
-
-                    GradientButton(
-                      label: 'Helper Assistant',
-                      icon: Icons.support_agent_rounded,
-                      onPressed: _openHelpAssistant,
+                      onPressed: (_navigating || _handingOff || vm.isLoading)
+                          ? null
+                          : _goToCooking,
                     ),
                     const SizedBox(height: 12),
                   ],

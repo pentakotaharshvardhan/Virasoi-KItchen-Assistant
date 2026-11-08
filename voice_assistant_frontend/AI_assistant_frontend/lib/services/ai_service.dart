@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import '../core/constants/api_constants.dart';
 import '../core/network/api_client.dart';
 import '../core/utils/result.dart';
@@ -103,6 +106,27 @@ class AiService {
       Success(data: final data) =>
         Success((data as Map<String, dynamic>)['answer'].toString()),
       Failure(message: final m) => Failure(m),
+    };
+  }
+
+  Future<Result<String>> askContextualHelp({
+    required String question,
+    required String screenName,
+    String? screenSummary,
+    Uint8List? screenshot,
+  }) async {
+    final body = <String, dynamic>{
+      'question': question,
+      'screenName': screenName,
+      if (screenSummary != null && screenSummary.isNotEmpty)
+        'screenSummary': screenSummary,
+      if (screenshot != null) 'screenshot': base64Encode(screenshot),
+    };
+    final res = await _api.post(ApiConstants.aiHelper, body: body);
+    return switch (res) {
+      Success(data: final data) =>
+        Success((data as Map<String, dynamic>)['answer'].toString()),
+      Failure(message: final message) => Failure(message),
     };
   }
 

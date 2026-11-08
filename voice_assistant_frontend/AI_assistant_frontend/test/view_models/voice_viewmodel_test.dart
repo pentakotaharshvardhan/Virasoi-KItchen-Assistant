@@ -102,8 +102,27 @@ void main() {
       });
     });
 
-    test('sends the unified REST command result to the session handler',
-        () {
+    test('help opens the in-app helper without sending a cooking command', () {
+      fakeAsync((async) {
+        var helperOpened = 0;
+        final vm = buildViewModel()
+          ..onHelpRequested = () async {
+            helperOpened++;
+          };
+        vm.init('sess-1');
+        async.flushMicrotasks();
+
+        voice.emitResult('help me', isFinal: true);
+        async.elapse(const Duration(seconds: 12));
+        async.flushMicrotasks();
+
+        expect(helperOpened, 1);
+        expect(ai.classifiedTranscripts, isEmpty);
+        expect(ws.sent, isEmpty);
+      });
+    });
+
+    test('sends the unified REST command result to the session handler', () {
       fakeAsync((async) {
         ai.commandResult = Success(VoiceCommandResult(
           command: 'REMOVE',
@@ -495,7 +514,8 @@ void main() {
 
         expect(readyCalls, 1);
         expect(vm.readyCheckActive, isFalse);
-        expect(ws.sent, isEmpty, reason: 'the answer must never hit the backend');
+        expect(ws.sent, isEmpty,
+            reason: 'the answer must never hit the backend');
       });
     });
 
@@ -739,7 +759,8 @@ void main() {
 
         voice.emitError('error_speech_timeout', permanent: true);
         async.flushMicrotasks();
-        expect(voice.startCalls, starts, reason: 'no instant restart into the same error');
+        expect(voice.startCalls, starts,
+            reason: 'no instant restart into the same error');
 
         async.elapse(const Duration(milliseconds: 499));
         expect(voice.startCalls, starts);
@@ -828,9 +849,8 @@ void main() {
   });
 
   group('duplicate frames', () {
-    int assistants(VoiceViewModel vm) => vm.transcript
-        .where((m) => m.sender == ChatSender.assistant)
-        .length;
+    int assistants(VoiceViewModel vm) =>
+        vm.transcript.where((m) => m.sender == ChatSender.assistant).length;
 
     Map<String, dynamic> snapshot(String message, int seq,
             {bool replay = false}) =>
@@ -853,7 +873,8 @@ void main() {
       ws.emit(snapshot('Stir the onions for two minutes', 1));
       await flush();
       expect(assistants(vm), 1, reason: 'duplicate frame must not bubble');
-      expect(voice.spoken.length, 1, reason: 'duplicate frame must not re-speak');
+      expect(voice.spoken.length, 1,
+          reason: 'duplicate frame must not re-speak');
     });
 
     test('the next frame in the sequence is still handled', () async {
@@ -869,7 +890,8 @@ void main() {
       expect(voice.spoken.length, 2);
     });
 
-    test('the same instruction on a NEW seq (double push) stays silent', () async {
+    test('the same instruction on a NEW seq (double push) stays silent',
+        () async {
       // Regression: SchedulerService.completeStep broadcast the snapshot to every socket and
       // the handler then echoed its own copy - identical text, ~250ms apart, different seq, so
       // the seq check above lets the second frame through and only the text guard can stop it.
@@ -884,8 +906,10 @@ void main() {
       ws.emit(snapshot('Heat the pan and saute the onions.', 2));
       await flush();
 
-      expect(assistants(vm), 1, reason: 'a new seq must not double a repeated instruction');
-      expect(voice.spoken.length, 1, reason: 'the player from the first copy is still running');
+      expect(assistants(vm), 1,
+          reason: 'a new seq must not double a repeated instruction');
+      expect(voice.spoken.length, 1,
+          reason: 'the player from the first copy is still running');
       expect(vm.lastSnapshot?['message'], 'Heat the pan and saute the onions.',
           reason: 'the second copy still updates the state');
     });
@@ -904,7 +928,8 @@ void main() {
       ws.emit(snapshot('Now add the tomatoes', 1));
       await flush();
 
-      expect(assistants(vm), 2, reason: 'post-reconnect frame must not be dropped');
+      expect(assistants(vm), 2,
+          reason: 'post-reconnect frame must not be dropped');
     });
 
     test('a replay of the current instruction updates state without speaking',
@@ -958,8 +983,9 @@ void main() {
   });
 
   group('connection status', () {
-    Iterable<Map<String, dynamic>> statusFrames() =>
-        ws.sent.whereType<Map<String, dynamic>>().where((f) => f['type'] == 'status');
+    Iterable<Map<String, dynamic>> statusFrames() => ws.sent
+        .whereType<Map<String, dynamic>>()
+        .where((f) => f['type'] == 'status');
 
     test('the first connect does not ask the server for a snapshot', () async {
       final vm = buildViewModel();
@@ -977,14 +1003,16 @@ void main() {
 
       ws.emitConnected(value: false);
       await flush();
-      expect(vm.wsConnected, isFalse, reason: 'the screen must be able to say so');
+      expect(vm.wsConnected, isFalse,
+          reason: 'the screen must be able to say so');
 
       ws.emitConnected();
       await flush();
 
       expect(vm.wsConnected, isTrue);
       expect(statusFrames(), hasLength(1),
-          reason: 'after a drop the state missed while offline must be re-requested');
+          reason:
+              'after a drop the state missed while offline must be re-requested');
     });
 
     test('a denied microphone is surfaced to the screen', () async {

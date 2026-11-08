@@ -8,6 +8,7 @@ import '../../models/chat_message_model.dart';
 import '../../models/recipe_model.dart';
 import '../../models/recipe_step_model.dart';
 import '../../services/session_service.dart';
+import '../../services/helper_assistant_launcher.dart';
 import '../../services/voice_service.dart';
 import '../../view_models/ingredient_viewmodel.dart';
 import '../../view_models/voice_viewmodel.dart';
@@ -57,6 +58,9 @@ class _VoiceAssistantPageState extends State<VoiceAssistantPage>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _vm = context.read<VoiceViewModel>();
+    if (!widget.helpMode) {
+      _vm.onHelpRequested = _openHelperAssistant;
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await _vm.init(widget.sessionId, helpMode: widget.helpMode);
       if (!mounted) return;
@@ -91,6 +95,7 @@ class _VoiceAssistantPageState extends State<VoiceAssistantPage>
     _pulse.dispose();
     _textController.dispose();
     _scrollController.dispose();
+    if (!widget.helpMode) _vm.onHelpRequested = null;
     _vm.detach();
     super.dispose();
   }
@@ -189,6 +194,18 @@ class _VoiceAssistantPageState extends State<VoiceAssistantPage>
     }
   }
 
+  Future<void> _openHelperAssistant() async {
+    await _vm.pause();
+    if (!mounted) return;
+    await HelperAssistantLauncher.open(
+      context,
+      screenName: 'Cooking Assistant',
+    );
+    if (mounted && !widget.helpMode) {
+      await _vm.startListening();
+    }
+  }
+
   String get _statusText => switch (_vm.state) {
         VoiceState.idle => 'Waiting for your command...',
         VoiceState.listening => "I'm listening...",
@@ -200,8 +217,8 @@ class _VoiceAssistantPageState extends State<VoiceAssistantPage>
   /// socket to lose, so it only reports a denied microphone there too).
   Widget _buildNoticeBanner() {
     if (!widget.helpMode && !_vm.wsConnected) {
-      return _noticeBanner(
-          Icons.wifi_off_rounded, 'Connection lost - reconnecting...', AppColors.error);
+      return _noticeBanner(Icons.wifi_off_rounded,
+          'Connection lost - reconnecting...', AppColors.error);
     }
     if (_vm.micPermissionDenied) {
       return _noticeBanner(
@@ -252,8 +269,7 @@ class _VoiceAssistantPageState extends State<VoiceAssistantPage>
               IconButton(
                 icon: const Icon(Icons.stop_circle_outlined),
                 tooltip: 'End cooking session',
-                onPressed:
-                    _isCancellingSession ? null : _confirmCancelSession,
+                onPressed: _isCancellingSession ? null : _confirmCancelSession,
               ),
           if (!widget.helpMode)
             IconButton(

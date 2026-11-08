@@ -1,8 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
 import '../../core/constants/app_colors.dart';
-import '../../core/routes/app_routes.dart';
-import '../../view_models/auth_viewmodel.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -39,13 +36,16 @@ class _SettingsPageState extends State<SettingsPage> {
           const SizedBox(height: 10),
           Container(
             padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(color: AppColors.surfaceCard, borderRadius: BorderRadius.circular(16)),
+            decoration: BoxDecoration(
+                color: AppColors.surfaceCard,
+                borderRadius: BorderRadius.circular(16)),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(
                   children: const [
-                    Icon(Icons.speed_rounded, color: AppColors.textSecondary, size: 20),
+                    Icon(Icons.speed_rounded,
+                        color: AppColors.textSecondary, size: 20),
                     SizedBox(width: 10),
                     Text('Assistant speech rate'),
                   ],
@@ -60,19 +60,6 @@ class _SettingsPageState extends State<SettingsPage> {
               ],
             ),
           ),
-          const SizedBox(height: 24),
-          _SectionLabel('Account'),
-          Container(
-            decoration: BoxDecoration(color: AppColors.surfaceCard, borderRadius: BorderRadius.circular(16)),
-            child: ListTile(
-              leading: const Icon(Icons.logout_rounded, color: AppColors.error),
-              title: const Text('Log out', style: TextStyle(color: AppColors.error, fontWeight: FontWeight.w600)),
-              onTap: () async {
-                await context.read<AuthViewModel>().logout();
-                if (context.mounted) Navigator.pushNamedAndRemoveUntil(context, AppRoutes.login, (r) => false);
-              },
-            ),
-          ),
         ],
       ),
     );
@@ -85,7 +72,11 @@ class _SectionLabel extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Padding(
         padding: const EdgeInsets.only(bottom: 10, top: 6),
-        child: Text(text, style: const TextStyle(fontWeight: FontWeight.w700, color: AppColors.textSecondary, fontSize: 13)),
+        child: Text(text,
+            style: const TextStyle(
+                fontWeight: FontWeight.w700,
+                color: AppColors.textSecondary,
+                fontSize: 13)),
       );
 }
 
@@ -94,13 +85,19 @@ class _SwitchTile extends StatelessWidget {
   final String title;
   final bool value;
   final ValueChanged<bool> onChanged;
-  const _SwitchTile({required this.icon, required this.title, required this.value, required this.onChanged});
+  const _SwitchTile(
+      {required this.icon,
+      required this.title,
+      required this.value,
+      required this.onChanged});
 
   @override
   Widget build(BuildContext context) {
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
-      decoration: BoxDecoration(color: AppColors.surfaceCard, borderRadius: BorderRadius.circular(16)),
+      decoration: BoxDecoration(
+          color: AppColors.surfaceCard,
+          borderRadius: BorderRadius.circular(16)),
       child: SwitchListTile(
         secondary: Icon(icon, color: AppColors.textSecondary),
         title: Text(title, style: const TextStyle(fontSize: 13.5)),

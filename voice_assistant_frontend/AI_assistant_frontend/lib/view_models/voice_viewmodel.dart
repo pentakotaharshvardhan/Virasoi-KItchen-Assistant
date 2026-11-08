@@ -46,6 +46,7 @@ class VoiceViewModel extends ChangeNotifier {
 
   /// Ingredient screen supplies the exact current checklist candidates for command classification.
   Future<List<String>> Function()? onAvailableIngredients;
+  Future<void> Function()? onHelpRequested;
 
   /// The Ingredient screen registers this so the assistant can read out whatever is still
   /// pending when the backend asks with a `remaining_items_request`.
@@ -179,7 +180,10 @@ class VoiceViewModel extends ChangeNotifier {
         _lastSeq = 0;
         // A dropped socket means the kitchen kept cooking without us: ask for the current
         // state again (the answer is a replay frame, so it only speaks if it says anything new).
-        if (isReconnect && !isHelpMode && _hasBackendSession && !readyCheckActive) {
+        if (isReconnect &&
+            !isHelpMode &&
+            _hasBackendSession &&
+            !readyCheckActive) {
           requestStatus();
         }
       }
@@ -386,6 +390,17 @@ class VoiceViewModel extends ChangeNotifier {
   }
 
   void _sendUserText(String text) async {
+    if (!isHelpMode && onHelpRequested != null && _isHelpRequest(text)) {
+      _listenWindowTimer?.cancel();
+      _listenWindowTimer = null;
+      liveTranscript = '';
+      _finalizedTranscript = '';
+      _partialTranscript = '';
+      await pause();
+      await onHelpRequested?.call();
+      return;
+    }
+
     _listenWindowTimer?.cancel();
     _listenWindowTimer = null;
 
@@ -478,6 +493,19 @@ class VoiceViewModel extends ChangeNotifier {
     'pause everything': 'STOP',
     'help': 'HELP',
   };
+
+  static bool _isHelpRequest(String raw) {
+    final normalized = raw
+        .toLowerCase()
+        .trim()
+        .replaceAll(RegExp(r'[.!?,]+$'), '')
+        .replaceAll(RegExp(r'\s+'), ' ');
+    return normalized == 'help' ||
+        normalized.startsWith('help me') ||
+        normalized.startsWith('open help') ||
+        normalized.startsWith('open the helper') ||
+        normalized.startsWith('i need help');
+  }
 
   static String? _fastPathCommand(String raw) {
     var t = raw.toLowerCase().trim();

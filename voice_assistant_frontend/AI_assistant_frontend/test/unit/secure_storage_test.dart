@@ -19,6 +19,7 @@ void main() {
       refreshToken: 'r',
       userName: 'Chef',
       userUsername: 'chef',
+      userEmail: 'chef@example.com',
       userId: 'u-1',
     );
 
@@ -26,6 +27,7 @@ void main() {
     expect(await storage.refreshToken, 'r');
     expect(await storage.userName, 'Chef');
     expect(await storage.userUsername, 'chef');
+    expect(await storage.userEmail, 'chef@example.com');
     expect(await storage.userId, 'u-1');
   });
 
@@ -35,6 +37,7 @@ void main() {
 
     expect(await storage.accessToken, 'b');
     expect(await storage.userName, 'Chef');
+    expect(await storage.userEmail, isNull);
     expect(await storage.refreshToken, isNull);
   });
 

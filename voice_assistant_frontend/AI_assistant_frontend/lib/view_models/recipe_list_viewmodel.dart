@@ -6,6 +6,8 @@ import '../services/recipe_service.dart';
 
 enum ListStatus { loading, loaded, error }
 
+enum RecipeOriginFilter { all, ancestor, aiGenerated }
+
 class RecipeListViewModel extends ChangeNotifier {
   RecipeListViewModel({RecipeService? service, SecureStorage? storage})
       : _service = service ?? RecipeService(),
@@ -21,9 +23,11 @@ class RecipeListViewModel extends ChangeNotifier {
 
   String searchQuery = '';
   RecipeSortOption sort = RecipeSortOption.timeAsc;
+  RecipeOriginFilter originFilter = RecipeOriginFilter.all;
 
   Future<void> load() async {
     status = ListStatus.loading;
+    errorMessage = null;
     notifyListeners();
     final userId = await _storage.userId;
     if (userId == null || userId.isEmpty) {
@@ -59,7 +63,9 @@ class RecipeListViewModel extends ChangeNotifier {
 
   void _applyFilters() {
     var list = _all
-        .where((r) => r.title.toLowerCase().contains(searchQuery.toLowerCase()))
+        .where((r) =>
+            r.title.toLowerCase().contains(searchQuery.toLowerCase()) &&
+            _matchesOrigin(r))
         .toList();
     switch (sort) {
       case RecipeSortOption.timeAsc:
@@ -72,11 +78,30 @@ class RecipeListViewModel extends ChangeNotifier {
         list.sort(
             (a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
         break;
+      case RecipeSortOption.alphabeticalDesc:
+        list.sort(
+            (a, b) => b.title.toLowerCase().compareTo(a.title.toLowerCase()));
+        break;
       case RecipeSortOption.totalTime:
         list.sort((a, b) => a.totalTimeMinutes.compareTo(b.totalTimeMinutes));
         break;
     }
     visible = list;
     notifyListeners();
+  }
+
+  void changeOriginFilter(RecipeOriginFilter filter) {
+    originFilter = filter;
+    _applyFilters();
+  }
+
+  bool _matchesOrigin(RecipeModel recipe) {
+    final source = recipe.source.toUpperCase();
+    return switch (originFilter) {
+      RecipeOriginFilter.all => true,
+      RecipeOriginFilter.ancestor => source == 'ANCESTOR',
+      RecipeOriginFilter.aiGenerated =>
+        source == 'AI_GENERATED' || source == 'AI',
+    };
   }
 }

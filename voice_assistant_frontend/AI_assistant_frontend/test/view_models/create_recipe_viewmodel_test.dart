@@ -9,18 +9,15 @@ import '../helpers/fixtures.dart';
 
 void main() {
   late FakeRecipeService service;
-  late FakeAiService ai;
   late SecureStorage storage;
 
   setUp(() {
     service = FakeRecipeService();
-    ai = FakeAiService();
     storage = SecureStorage.inMemory();
   });
 
   CreateRecipeViewModel buildViewModel() => CreateRecipeViewModel(
         service: service,
-        aiService: ai,
         storage: storage,
       );
 
@@ -64,9 +61,22 @@ void main() {
     expect(vm.selectedDishes, ['Paneer Tikka', 'Dal Makhani']);
   });
 
+  test('beginDraft clears stale dishes and preselects the requested dish', () {
+    final vm = buildViewModel()
+      ..addDish('Old dish')
+      ..generated = [sampleRecipe(id: 'old')];
+
+    vm.beginDraft(initialDishName: '  Paneer Tikka  ');
+
+    expect(vm.selectedDishes, ['Paneer Tikka']);
+    expect(vm.generated, isEmpty);
+    expect(vm.suggestedRecipes, isEmpty);
+    expect(vm.errorMessage, isNull);
+  });
+
   test('addDish clears any previous suggestion', () {
     final vm = buildViewModel();
-    vm.suggestedDishName = 'Stale suggestion';
+    vm.suggestedRecipes = [sampleRecipe(dishName: 'Stale suggestion')];
 
     vm.addDish('Dal');
 
@@ -94,49 +104,46 @@ void main() {
     expect(vm.selectedDishes, ['B']);
   });
 
-  test('short input clears the suggestion without calling the AI', () {
+  test('short input clears suggestions', () {
     final vm = buildViewModel();
-    vm.suggestedDishName = 'Old';
+    vm.suggestedRecipes = [sampleRecipe(dishName: 'Old')];
 
     vm.onDishNameChanged('pa');
 
     expect(vm.suggestedDishName, '');
-    expect(ai.suggestions, isEmpty);
   });
 
-  test('debounced suggestion waits 600ms before calling the AI', () {
+  test('suggestions are loaded from the signed-in user recipe collection',
+      () async {
+    await storage.saveSession(accessToken: 'jwt', userId: 'user-42');
+    service.listResult = Success([
+      sampleRecipe(id: 'owned', dishName: 'Paneer Tikka'),
+    ]);
+    final vm = buildViewModel();
+    await vm.init();
+
     fakeAsync((async) {
-      final vm = buildViewModel();
-      ai.suggestionResult = const Success('Paneer Tikka');
-
-      vm.onDishNameChanged('pan');
-      async.elapse(const Duration(milliseconds: 599));
-      expect(ai.suggestions, isEmpty);
-
-      async.elapse(const Duration(milliseconds: 2));
-      async.flushMicrotasks();
-
-      expect(ai.suggestions, ['pan']);
-      expect(vm.suggestedDishName, 'Paneer Tikka');
-    });
-  });
-
-  test('typing again resets the debounce window', () {
-    fakeAsync((async) {
-      final vm = buildViewModel();
-      ai.suggestionResult = const Success('Paneer Tikka');
-
-      vm.onDishNameChanged('pan');
-      async.elapse(const Duration(milliseconds: 400));
-      vm.onDishNameChanged('paneer');
-      async.elapse(const Duration(milliseconds: 400));
-
-      expect(ai.suggestions, isEmpty);
-
+      vm.onDishNameChanged('paner');
       async.elapse(const Duration(milliseconds: 250));
       async.flushMicrotasks();
 
-      expect(ai.suggestions, ['paneer']);
+      expect(service.lastUserId, 'user-42');
+      expect(vm.suggestedRecipes.map((recipe) => recipe.dishName),
+          ['Paneer Tikka']);
+    });
+  });
+
+  test('no suggestions are fetched without a signed-in user id', () async {
+    final vm = buildViewModel();
+    await vm.init();
+
+    fakeAsync((async) {
+      vm.onDishNameChanged('paneer');
+      async.elapse(const Duration(milliseconds: 250));
+      async.flushMicrotasks();
+
+      expect(service.listByUserCalls, 0);
+      expect(vm.suggestedRecipes, isEmpty);
     });
   });
 
