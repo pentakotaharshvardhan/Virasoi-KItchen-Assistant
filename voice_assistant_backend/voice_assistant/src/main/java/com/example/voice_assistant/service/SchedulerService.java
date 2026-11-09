@@ -536,7 +536,7 @@ public class SchedulerService {
                             .anyMatch(s -> s.getStatus() == StepStatus.TIMER_RUNNING);
                     boolean allDone = session.getDishes().stream().allMatch(d -> d.getStatus() == DishStatus.COMPLETED);
                     if (allDone && !session.getDishes().isEmpty()) {
-                        return prefix(completion, "All dishes are done. Enjoy your meal!");
+                        return prefix(completion, "All dishes are done. Happy meal!");
                     }
                     if (anyoneCooking) {
                         return prefix(completion,

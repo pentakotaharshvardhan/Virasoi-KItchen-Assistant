@@ -165,6 +165,7 @@ class _VoiceAssistantPageState extends State<VoiceAssistantPage>
   }
 
   void _toggleMic() {
+    if (_vm.mealComplete) return;
     if (_vm.state == VoiceState.listening) {
       _vm.stopListening();
     } else {
@@ -186,12 +187,15 @@ class _VoiceAssistantPageState extends State<VoiceAssistantPage>
     }
   }
 
-  String get _statusText => switch (_vm.state) {
-        VoiceState.idle => 'Waiting for your command...',
-        VoiceState.listening => "I'm listening...",
-        VoiceState.thinking => 'Processing...',
-        VoiceState.speaking => 'Speaking...',
-      };
+  String get _statusText {
+    if (_vm.mealComplete) return 'Meal complete - happy meal!';
+    return switch (_vm.state) {
+          VoiceState.idle => 'Waiting for your command...',
+          VoiceState.listening => "I'm listening...",
+          VoiceState.thinking => 'Processing...',
+          VoiceState.speaking => 'Speaking...',
+        };
+  }
 
   /// Connection / permission banner above the conversation (help mode never has a session
   /// socket to lose, so it only reports a denied microphone there too).
@@ -338,7 +342,11 @@ class _VoiceAssistantPageState extends State<VoiceAssistantPage>
 
   Widget _buildStatusRow() {
     Widget icon;
-    switch (_vm.state) {
+    if (_vm.mealComplete) {
+      icon = const Icon(Icons.check_circle_rounded,
+          color: AppColors.primary, size: 20);
+    } else {
+      switch (_vm.state) {
       case VoiceState.listening:
         icon = ScaleTransition(
           scale: Tween<double>(begin: 0.8, end: 1.25).animate(_pulse),
@@ -358,6 +366,7 @@ class _VoiceAssistantPageState extends State<VoiceAssistantPage>
       case VoiceState.idle:
         icon = const Icon(Icons.mic_none_rounded,
             color: AppColors.textSecondary, size: 18);
+      }
     }
 
     return Padding(
@@ -372,7 +381,7 @@ class _VoiceAssistantPageState extends State<VoiceAssistantPage>
             style: TextStyle(
               fontSize: 13,
               fontWeight: FontWeight.w500,
-              color: _vm.state == VoiceState.listening
+              color: _vm.mealComplete || _vm.state == VoiceState.listening
                   ? AppColors.primary
                   : AppColors.textSecondary,
             ),
@@ -453,7 +462,7 @@ class _VoiceAssistantPageState extends State<VoiceAssistantPage>
             ),
             const SizedBox(width: 2),
             GestureDetector(
-              onTap: _toggleMic,
+              onTap: _vm.mealComplete ? null : _toggleMic,
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 250),
                 width: 46,
@@ -475,9 +484,11 @@ class _VoiceAssistantPageState extends State<VoiceAssistantPage>
                   ],
                 ),
                 child: Icon(
-                  _vm.state == VoiceState.listening
-                      ? Icons.stop_rounded
-                      : Icons.mic_rounded,
+                  _vm.mealComplete
+                      ? Icons.check_rounded
+                      : _vm.state == VoiceState.listening
+                          ? Icons.stop_rounded
+                          : Icons.mic_rounded,
                   color: Colors.white,
                   size: 24,
                 ),

@@ -8,6 +8,7 @@ import '../core/utils/secure_storage.dart';
 import '../models/chat_message_model.dart';
 import '../services/ai_service.dart';
 import '../services/voice_service.dart';
+import '../services/voice_state_machine.dart';
 
 class VoiceViewModel extends ChangeNotifier {
   static const _listenWindow = Duration(seconds: 12);
@@ -21,7 +22,23 @@ class VoiceViewModel extends ChangeNotifier {
         _ai = aiService ?? AiService(),
         _storage = storage ?? SecureStorage.instance,
         _wsFactory = wsFactory ??
-            ((url, token) => AppWebSocketService(url: url, token: token));
+            ((url, token) => AppWebSocketService(url: url, token: token)) {
+    // Single source of truth for the hands-free loop: the machine owns the mic gate and the
+    // turn ids, so the app can never transcribe its own TTS output.
+    _machine = VoiceStateMachine(
+      engine: _voice,
+      onStateChanged: _onTurnStateChanged,
+      onResult: _onRecognizerResult,
+      onSilence: _onSilenceDetected,
+      onError: _onRecognizerError,
+    );
+  }
+
+  late final VoiceStateMachine _machine;
+
+  /// Turn id of the request currently being processed, used to bind the spoken answer and its
+  /// playback-completion callback to the same conversational turn.
+  String? _currentTurnId;
 
   final VoiceEngine _voice;
   final AiService _ai;
@@ -38,6 +55,11 @@ class VoiceViewModel extends ChangeNotifier {
   /// Latest session snapshot pushed by the scheduler (dishes, stoves, progress) - the cooking
   /// screen renders the recipe-steps panel from it.
   Map<String, dynamic>? lastSnapshot;
+
+  /// True once the backend reports every dish finished (session status COMPLETED). The final
+  /// "Happy meal!" line is still spoken, then the microphone and the heartbeat stop for good -
+  /// the meal is over, nothing is left to schedule or listen for.
+  bool mealComplete = false;
 
   /// When true the user is being asked "are you ready to start cooking?" and their answer is
   /// handled locally instead of being sent to the backend (the dish isn't added yet).
@@ -58,8 +80,6 @@ class VoiceViewModel extends ChangeNotifier {
   Timer? _sttRetryTimer;
   String _finalizedTranscript = '';
   String _partialTranscript = '';
-  bool _isRestartingListener = false;
-  bool _isClosingListenWindow = false;
 
   /// Highest server sequence number already handled on the current socket. The backend stamps
   /// every frame with a per-session `seq`, so a re-pushed snapshot or a frame delivered twice
@@ -90,7 +110,6 @@ class VoiceViewModel extends ChangeNotifier {
   /// True while WE asked the recogniser to stop (end of a listen window, sending a command).
   /// The platform then reports `notListening`, which must not be mistaken for a timeout that
   /// needs an immediate restart - that flapping was `listening -> notListening -> listening`.
-  bool _expectStop = false;
 
   /// Consecutive recogniser failures; drives the backoff so a permanent timeout cannot
   /// spin-restart forever. Reset as soon as real speech is recognised.
@@ -129,7 +148,8 @@ class VoiceViewModel extends ChangeNotifier {
     _heartbeatTimer?.cancel();
     _sttRetryTimer?.cancel();
     _sttRetryTimer = null;
-    _isClosingListenWindow = false;
+    _machine.dispose();
+    _currentTurnId = null;
     _sttErrorCount = 0;
 
     isHelpMode = helpMode;
@@ -151,6 +171,7 @@ class VoiceViewModel extends ChangeNotifier {
     // onRemainingItemsRequest is intentionally NOT cleared here: the Ingredient screen
     // registers it while it sits underneath this one in the nav stack.
     lastSnapshot = null;
+    mealComplete = false;
     _lastSeq = 0;
     _lastSpokenText = null;
     _lastSpokenAt = null;
@@ -165,7 +186,7 @@ class VoiceViewModel extends ChangeNotifier {
     if (micPermissionDenied) notifyListeners();
     await _voice.initSpeech(
       onStatus: _handleSttStatus,
-      onError: _handleSttError,
+      onError: _onRecognizerError,
     );
     await _voice.initTts();
 
@@ -208,87 +229,90 @@ class VoiceViewModel extends ChangeNotifier {
     _startSessionHeartbeat();
 
     // 3. Auto-start listening
-    startListening();
+    await startListening();
   }
 
   void _handleSttStatus(String status) {
     debugPrint("STT Status changed: $status");
-    // A stop we asked for ourselves - never treat it as a reason to restart.
-    if (_expectStop) return;
-    if ((status == 'done' || status == 'notListening') &&
-        state == VoiceState.listening &&
-        _active &&
-        !_isClosingListenWindow) {
-      _restartListener(preserveTranscript: true);
-    }
+    _machine.handleStatus(status);
   }
 
-  /// Recogniser failures arrive as e.g. `error_speech_timeout, permanent: true`. Restarting
-  /// straight away just re-enters the same failure, so back off instead - and only while the
-  /// mic is actually supposed to be on.
-  void _handleSttError(String code, bool permanent) {
+  void _onRecognizerError(String code, bool permanent) {
     debugPrint("STT error: $code (permanent: $permanent)");
-    if (!_active ||
-        _expectStop ||
-        _isClosingListenWindow ||
-        state != VoiceState.listening) {
+    if (!_active || mealComplete) return;
+    if (_machine.state != VoiceTurnState.listening &&
+        _machine.state != VoiceTurnState.error) {
       return;
     }
-    if (_isRestartingListener || _sttRetryTimer != null) return;
+    if (_sttRetryTimer != null) return;
 
+    // Keep the microphone closed while backing off; the retry reopens it through the machine.
+    _machine.noteError();
     final step = (_sttErrorCount < _sttBackoff.length)
         ? _sttErrorCount
         : _sttBackoff.length - 1;
     _sttErrorCount++;
-    _sttRetryTimer = Timer(Duration(milliseconds: _sttBackoff[step]), () {
+    _sttRetryTimer = Timer(Duration(milliseconds: _sttBackoff[step]), () async {
       _sttRetryTimer = null;
-      if (!_active || state != VoiceState.listening) return;
-      _restartListener(preserveTranscript: true);
+      if (!_active || mealComplete) return;
+      await _machine.restartListening();
+      _armListenWindow();
     });
   }
 
-  Future<void> _restartListener({required bool preserveTranscript}) async {
-    if (_isRestartingListener) return;
-    _isRestartingListener = true;
-    try {
-      await _startListeningInternal(preserveTranscript: preserveTranscript);
-    } finally {
-      _isRestartingListener = false;
+  /// The platform stopped the recogniser on silence. Restart it (keeping the pending transcript)
+  /// - only the listening window decides when a turn actually starts.
+  void _onSilenceDetected() {
+    _machine.restartListening();
+    _armListenWindow();
+  }
+
+  void _onRecognizerResult(String text, bool isFinal) {
+    // The machine only forwards results while the mic is allowed to be heard, so TTS can never
+    // be transcribed back into a command.
+    _updateTranscript(text, isFinal);
+    notifyListeners();
+  }
+
+  void _onTurnStateChanged(VoiceTurnState turnState) {
+    switch (turnState) {
+      case VoiceTurnState.idle:
+      case VoiceTurnState.error:
+        _cancelListenWindow();
+        state = VoiceState.idle;
+        break;
+      case VoiceTurnState.listening:
+        state = VoiceState.listening;
+        _armListenWindow();
+        break;
+      case VoiceTurnState.processing:
+        _cancelListenWindow();
+        state = VoiceState.thinking;
+        break;
+      case VoiceTurnState.speaking:
+        _cancelListenWindow();
+        state = VoiceState.speaking;
+        break;
     }
+    notifyListeners();
+  }
+
+  void _armListenWindow() {
+    _listenWindowTimer?.cancel();
+    _listenWindowTimer = Timer(_listenWindow, _finishListenWindow);
+  }
+
+  void _cancelListenWindow() {
+    _listenWindowTimer?.cancel();
+    _listenWindowTimer = null;
   }
 
   Future<void> startListening() async {
     _active = true;
-    if (state == VoiceState.listening ||
-        state == VoiceState.speaking ||
-        state == VoiceState.thinking) return;
-
-    _listenWindowTimer?.cancel();
-    _listenWindowTimer = Timer(_listenWindow, _finishListenWindow);
-    await _startListeningInternal();
-  }
-
-  Future<void> _startListeningInternal(
-      {bool preserveTranscript = false}) async {
-    print("Voice: Listening starting...");
-    state = VoiceState.listening;
-    // From here on any `notListening` is either a timeout or an error, never our own stop.
-    _expectStop = false;
-    if (!preserveTranscript) {
-      liveTranscript = '';
-      _finalizedTranscript = '';
-      _partialTranscript = '';
-    }
-    notifyListeners();
-
-    await _voice.startListening(
-      onResult: (text, isFinal) {
-        if (state != VoiceState.listening) return;
-
-        _updateTranscript(text, isFinal);
-        notifyListeners();
-      },
-    );
+    // The meal is over: the backend stopped scheduling and we already said goodbye.
+    if (mealComplete) return;
+    await _machine.start();
+    if (_machine.state == VoiceTurnState.listening) _armListenWindow();
   }
 
   void _updateTranscript(String text, bool isFinal) {
@@ -335,41 +359,24 @@ class VoiceViewModel extends ChangeNotifier {
 
   Future<void> _finishListenWindow() async {
     _listenWindowTimer = null;
-    if (state != VoiceState.listening || !_active) return;
+    if (!_active || _machine.state != VoiceTurnState.listening) return;
 
-    _isClosingListenWindow = true;
-    _expectStop = true;
-    try {
-      await _voice.stopListening();
-    } finally {
-      _isClosingListenWindow = false;
-    }
-
-    if (state != VoiceState.listening || !_active) return;
     final text = liveTranscript.trim();
     if (text.isNotEmpty) {
       _sendUserText(text);
       return;
     }
 
-    state = VoiceState.idle;
-    notifyListeners();
-    startListening();
+    // Nothing was said: just reopen the window.
+    await _machine.restartListening();
+    _armListenWindow();
   }
 
   Future<void> stopListening() async {
-    _listenWindowTimer?.cancel();
-    _listenWindowTimer = null;
+    _cancelListenWindow();
     _sttRetryTimer?.cancel();
     _sttRetryTimer = null;
-    _isClosingListenWindow = true;
-    _expectStop = true;
-    try {
-      await _voice.stopListening();
-    } finally {
-      _isClosingListenWindow = false;
-    }
-    if (state == VoiceState.listening) state = VoiceState.idle;
+    await _machine.pause();
     notifyListeners();
   }
 
@@ -381,10 +388,6 @@ class VoiceViewModel extends ChangeNotifier {
     _speechQueue.clear();
     _isSpeaking = false;
     await stopListening();
-    if (state != VoiceState.idle) {
-      state = VoiceState.idle;
-      notifyListeners();
-    }
   }
 
   /// Stops listening AND closes the socket. Use when handing a session off to another screen
@@ -409,6 +412,8 @@ class VoiceViewModel extends ChangeNotifier {
   }
 
   void _sendUserText(String text) async {
+    // Nothing is left to cook - ignore stray speech/typing after the final farewell.
+    if (!isHelpMode && mealComplete) return;
     if (!isHelpMode && onHelpRequested != null && _isHelpRequest(text)) {
       _listenWindowTimer?.cancel();
       _listenWindowTimer = null;
@@ -420,19 +425,21 @@ class VoiceViewModel extends ChangeNotifier {
       return;
     }
 
-    _listenWindowTimer?.cancel();
-    _listenWindowTimer = null;
+    _cancelListenWindow();
 
     // Reset live text so it's not visible while thinking
     liveTranscript = '';
     _finalizedTranscript = '';
     _partialTranscript = '';
-    transcript.add(ChatMessageModel(text: text, sender: ChatSender.user));
-    state = VoiceState.thinking;
-    notifyListeners();
 
-    _expectStop = true;
-    _voice.stopListening();
+    // Silence became a turn: the machine mints its id and closes the microphone BEFORE the
+    // request leaves, so nothing the speaker plays can be transcribed back in.
+    final turnId = await _machine.beginProcessing();
+    _currentTurnId = turnId;
+    if (!_active) return;
+
+    transcript.add(ChatMessageModel(text: text, sender: ChatSender.user));
+    notifyListeners();
 
     // Ready-check: the dish hasn't been added to the session yet, so answer locally.
     if (readyCheckActive) {
@@ -460,6 +467,7 @@ class VoiceViewModel extends ChangeNotifier {
           'sessionId': sessionId,
           'text': text,
           'result': VoiceCommandResult(command: fastPath).toJson(),
+          'turnId': _currentTurnId,
         });
         return;
       }
@@ -477,6 +485,7 @@ class VoiceViewModel extends ChangeNotifier {
             'sessionId': sessionId,
             'text': text,
             'result': command.toJson(),
+            'turnId': _currentTurnId,
           });
         case Failure():
           // The socket path applies the same deterministic fallback classifier if REST is unavailable.
@@ -486,6 +495,7 @@ class VoiceViewModel extends ChangeNotifier {
             'text': text,
             'transcript': text,
             'availableIngredientNames': availableIngredients,
+            'turnId': _currentTurnId,
           });
       }
     }
@@ -575,7 +585,9 @@ class VoiceViewModel extends ChangeNotifier {
     if (announce) {
       _listenWindowTimer?.cancel();
       _listenWindowTimer = null;
-      await stopListening();
+      // Mute rather than pause: the machine stays active so the announcement is still spoken and
+      // the microphone reopens once playback completes.
+      await _machine.mute();
       _speak('All ingredients are gathered. Are you ready to start cooking?');
     }
   }
@@ -668,6 +680,7 @@ class VoiceViewModel extends ChangeNotifier {
     //    cooking screen opens). The spoken text lives under data.message.
     if (type == 'session_snapshot') {
       if (data != null) lastSnapshot = data;
+      _markMealCompleteIfDone(data);
       final text =
           data?['message']?.toString() ?? msg['message']?.toString() ?? '';
       final audioBase64 = data?['messageAudioBase64']?.toString() ??
@@ -774,6 +787,24 @@ class VoiceViewModel extends ChangeNotifier {
     }
   }
 
+  /// Remembers that the meal is finished (session COMPLETED or every dish COMPLETED). The final
+  /// message is still spoken, but no new listening window or heartbeat is started afterwards.
+  void _markMealCompleteIfDone(Map<String, dynamic>? data) {
+    if (data == null || mealComplete || isHelpMode) return;
+    final status = data['sessionStatus']?.toString();
+    final dishes = data['dishes'];
+    final allDishesDone = dishes is List &&
+        dishes.isNotEmpty &&
+        dishes.every((dish) =>
+            dish is Map && dish['status']?.toString() == 'COMPLETED');
+    if (status != 'COMPLETED' && !allDishesDone) return;
+    mealComplete = true;
+    _listenWindowTimer?.cancel();
+    _listenWindowTimer = null;
+    pauseSessionHeartbeat();
+    notifyListeners();
+  }
+
   Future<void> _speakRemainingItems() async {
     List<String> items = const [];
     final cb = onRemainingItemsRequest;
@@ -806,23 +837,39 @@ class VoiceViewModel extends ChangeNotifier {
     _lastSpokenText = text;
     _lastSpokenAt = now;
 
-    _speechQueue.add(_SpeechRequest(text, audioBase64));
+    _speechQueue.add(_SpeechRequest(text, audioBase64, _currentTurnId));
     _drainSpeechQueue();
   }
 
   /// Plays queued messages strictly one after another: the chat bubble and the voice for a
   /// message appear only once the previous message has finished speaking.
-  void _drainSpeechQueue() {
+  ///
+  /// Every playback is bound to a turn id. The microphone stays closed for the whole
+  /// [VoiceTurnState.speaking] phase and is reopened only when the completion callback reports
+  /// the turn that is still current - stale or duplicated callbacks are ignored.
+  Future<void> _drainSpeechQueue() async {
     if (_isSpeaking || _speechQueue.isEmpty || !_active) return;
 
     _isSpeaking = true;
     final request = _speechQueue.removeAt(0);
     final epoch = _speechEpoch;
+    // Responses to a user turn reuse its id; unsolicited pushes get one at speak time.
+    final turnId = request.turnId ?? _currentTurnId;
+
+    // Close the microphone BEFORE the first sample is played (echo gate).
+    await _machine.speak(turnId);
+    if (epoch != _speechEpoch) {
+      _isSpeaking = false;
+      return;
+    }
+    if (!_active) {
+      _isSpeaking = false;
+      return;
+    }
 
     print("Assistant Speaking: ${request.text}");
     transcript.add(
         ChatMessageModel(text: request.text, sender: ChatSender.assistant));
-    state = VoiceState.speaking;
     notifyListeners();
 
     Future<void> playback;
@@ -844,9 +891,15 @@ class VoiceViewModel extends ChangeNotifier {
         return;
       }
       print("Assistant Finished Speaking.");
-      state = VoiceState.idle;
-      notifyListeners();
-      startListening(); // Auto-restart listening
+      if (mealComplete) {
+        // Last instruction of the meal played: keep the microphone and the voice pipeline off.
+        print("Meal complete - stopping the voice assistant.");
+        _machine.finishSpeaking(turnId);
+        stopListening();
+        return;
+      }
+      // Back to LISTENING only for the turn this playback belonged to.
+      _machine.finishSpeaking(turnId);
     });
   }
 
@@ -855,6 +908,7 @@ class VoiceViewModel extends ChangeNotifier {
     _speechEpoch++;
     _speechQueue.clear();
     _isSpeaking = false;
+    _machine.dispose();
     _voice.dispose();
     _wsSub?.cancel();
     _wsSub = null;
@@ -869,10 +923,12 @@ class VoiceViewModel extends ChangeNotifier {
   }
 }
 
-/// One queued spoken message: text plus the optional pre-rendered audio from the backend.
+/// One queued spoken message: text plus the optional pre-rendered audio from the backend and
+/// the conversational turn it answers (null for unsolicited pushes).
 class _SpeechRequest {
-  const _SpeechRequest(this.text, this.audioBase64);
+  const _SpeechRequest(this.text, this.audioBase64, [this.turnId]);
 
   final String text;
   final String? audioBase64;
+  final String? turnId;
 }

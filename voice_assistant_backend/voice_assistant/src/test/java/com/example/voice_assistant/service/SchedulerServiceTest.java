@@ -231,15 +231,25 @@ class SchedulerServiceTest {
         CookingSession session = sessionWithStoves(1);
         SessionDish dish = addDish(session, "Dal Tadka", 0, StepType.USER_ACTION);
         SchedulerService scheduler = schedulerFor(session);
+        // Mirror the real CookingSessionService: the session is completed as soon as the last dish is.
+        org.mockito.Mockito.doAnswer(invocation -> {
+            CookingSession s = invocation.getArgument(0);
+            if (!s.getDishes().isEmpty()
+                    && s.getDishes().stream().allMatch(d -> d.getStatus() == DishStatus.COMPLETED)) {
+                s.setStatus(SessionStatus.COMPLETED);
+            }
+            return null;
+        }).when(cookingSessionService).markSessionCompletedIfAllDishesDone(any(CookingSession.class));
 
         scheduler.tick(session.getId());
         com.example.voice_assistant.dto.response.SessionSnapshotDto snapshot =
                 scheduler.completeStep(session.getId(), dish.getSteps().get(0).getId());
 
         assertEquals(DishStatus.COMPLETED, dish.getStatus());
+        assertEquals(SessionStatus.COMPLETED, session.getStatus(), "the session ends once the meal is cooked");
         assertTrue(snapshot.message.contains("Dal Tadka"), snapshot.message);
         assertTrue(snapshot.message.contains("is done"), snapshot.message);
-        assertTrue(snapshot.message.contains("Enjoy your meal"), snapshot.message);
+        assertTrue(snapshot.message.contains("Happy meal"), snapshot.message);
     }
 
     @Test

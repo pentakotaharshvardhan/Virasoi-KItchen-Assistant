@@ -644,6 +644,38 @@ void main() {
       expect(voice.spoken.last, 'Chop the onions.');
     });
 
+    test('the final snapshot ends the voice pipeline after the goodbye', () async {
+      final vm = buildViewModel();
+      await vm.init('s');
+      voice.playbackGate = Completer<void>();
+
+      ws.emit({
+        'type': 'session_snapshot',
+        'data': {
+          'message': '"Dal" is done! All dishes are done. Happy meal!',
+          'sessionStatus': 'COMPLETED',
+          'dishes': [
+            {'name': 'Dal', 'status': 'COMPLETED'},
+          ],
+        },
+      });
+      await flush();
+
+      expect(vm.mealComplete, isTrue);
+      expect(voice.spoken.last, contains('Happy meal'));
+
+      voice.playbackGate!.complete();
+      voice.playbackGate = null;
+      await flush();
+
+      expect(voice.listening, isFalse,
+          reason: 'the mic stays off once the meal is over');
+      expect(vm.state, VoiceState.idle);
+
+      await vm.startListening();
+      expect(voice.listening, isFalse, reason: 'and nothing may restart it');
+    });
+
     test('init resets a stale snapshot from a previous session', () async {
       final vm = buildViewModel();
       await vm.init('s');
