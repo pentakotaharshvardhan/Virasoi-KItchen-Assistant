@@ -311,7 +311,12 @@ public class SchedulerService {
         SessionDishStep step = findStep(session, stepId)
                 .orElseThrow(() -> new ResourceNotFoundException("Step not found: " + stepId));
 
-        if (step.getStatus() != StepStatus.IN_PROGRESS && step.getStatus() != StepStatus.TIMER_COMPLETED_AWAITING_USER) {
+        // A timer is advisory: the user may finish early ("next") while it is still counting down,
+        // and "next" after a finished timer is the normal path. Only genuinely inactive steps are
+        // rejected here - rejecting TIMER_RUNNING used to throw and close the websocket.
+        if (step.getStatus() != StepStatus.IN_PROGRESS
+                && step.getStatus() != StepStatus.TIMER_RUNNING
+                && step.getStatus() != StepStatus.TIMER_COMPLETED_AWAITING_USER) {
             throw new IllegalStateException("Step is not currently active (status=" + step.getStatus() + ")");
         }
 

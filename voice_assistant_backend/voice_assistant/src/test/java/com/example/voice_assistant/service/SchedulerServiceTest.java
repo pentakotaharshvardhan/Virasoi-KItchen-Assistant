@@ -242,6 +242,25 @@ class SchedulerServiceTest {
         assertTrue(snapshot.message.contains("Enjoy your meal"), snapshot.message);
     }
 
+    @Test
+    void nextDuringARunningTimerCompletesTheStepEarlyAndCancelsTheTimer() {
+        CookingSession session = sessionWithStoves(1);
+        SessionDish dish = addDish(session, "Masala Chai", 0, StepType.STOVE_AND_USER);
+        SessionDishStep step = dish.getSteps().get(0);
+        step.setRequiresTimer(true);
+        step.setTimerSeconds(120);
+        SchedulerService scheduler = schedulerFor(session);
+
+        scheduler.tick(session.getId());
+        assertEquals(StepStatus.TIMER_RUNNING, step.getStatus());
+
+        scheduler.completeStep(session.getId(), step.getId());
+
+        assertEquals(StepStatus.COMPLETED, step.getStatus());
+        assertEquals(DishStatus.COMPLETED, dish.getStatus());
+        verify(timerService).cancelTimer(step.getId());
+    }
+
     private SchedulerService schedulerFor(CookingSession session) {
         when(sessionRepository.findByIdForUpdate(session.getId())).thenReturn(Optional.of(session));
         when(sessionRepository.findById(session.getId())).thenReturn(Optional.of(session));

@@ -47,6 +47,9 @@ ai:
   # Interactive commands must fail over to the deterministic classifier quickly instead of
   # leaving the assistant "thinking" for a whole minute.
   timeout-seconds: 10
+  # Recipe formatting/generation is ONE long AI call; it must not share the short interactive
+  # timeout or every brand-new dish fails with "Timeout on blocking read" during add-dish.
+  generation-timeout-seconds: 60
 
 # ---------------------------------------------------------------------------
 # Speech-to-text: Google Cloud Speech-to-Text v1 REST API, authenticated with

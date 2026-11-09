@@ -118,7 +118,11 @@ public class AudioStreamWebSocketHandler extends TextWebSocketHandler {
         // {"type":"user_text","text":...}. Classify + route it exactly like a spoken utterance.
         if (action.isEmpty() && "user_text".equals(type)) {
             String text = node.path("text").asText(node.path("transcript").asText(""));
-            handleUserText(session, text, readIngredientCandidates(node.path("availableIngredientNames")));
+            try {
+                handleUserText(session, text, readIngredientCandidates(node.path("availableIngredientNames")));
+            } catch (Exception e) {
+                sendFriendlyError(session, e);
+            }
             return;
         }
 
@@ -136,7 +140,11 @@ public class AudioStreamWebSocketHandler extends TextWebSocketHandler {
                 send(session, "error", Map.of("message", "The command result contains invalid parameters."));
                 return;
             }
-            handleClassifiedUserText(session, node.path("text").asText(""), parsed);
+            try {
+                handleClassifiedUserText(session, node.path("text").asText(""), parsed);
+            } catch (Exception e) {
+                sendFriendlyError(session, e);
+            }
             return;
         }
 
@@ -446,6 +454,23 @@ public class AudioStreamWebSocketHandler extends TextWebSocketHandler {
                 && registry.get(sessionId).contains(session);
         if (alreadyReceived) return;
         send(session, "session_snapshot", snapshot);
+    }
+
+    /**
+     * A command that cannot be applied must never escape the handler: Spring closes the websocket
+     * on an uncaught exception, which the app shows as "connection lost" mid-cook. Report it as a
+     * normal error frame instead so the assistant keeps listening.
+     */
+    private void sendFriendlyError(WebSocketSession session, Exception e) {
+        String raw = e.getMessage() == null ? "" : e.getMessage();
+        String message = raw.contains("not currently active")
+                ? "That step isn't active right now - say \"repeat\" to hear where you are."
+                : "I couldn't apply that just now. Please say it again.";
+        try {
+            send(session, "error", Map.of("message", message));
+        } catch (Exception ignored) {
+            // Socket already gone - nothing left to notify.
+        }
     }
 
     /**

@@ -34,6 +34,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -84,7 +85,8 @@ class AudioStreamWebSocketHandlerTest {
                 sessionDishStepRepository);
 
         when(socket.isOpen()).thenReturn(true);
-        when(socket.getId()).thenReturn("sock-1");
+        // Not every path touches the socket id (e.g. a rejected command), so keep it lenient.
+        lenient().when(socket.getId()).thenReturn("sock-1");
         when(socket.getUri()).thenReturn(URI.create("ws://localhost/ws/audio?sessionId=" + sessionId));
         doAnswer(invocation -> {
             sent.add(invocation.getArgument(0));
@@ -150,6 +152,21 @@ class AudioStreamWebSocketHandlerTest {
         assertEquals(2, snapshotFrames().size(), "two commands, two snapshots - never three");
     }
 
+    @Test
+    void aRejectedCommandRepliesWithAnErrorInsteadOfClosingTheSocket() throws Exception {
+        when(voiceCommandService.classify(eq("next"), any())).thenReturn(nextCommand());
+        when(schedulerService.tickQuietly(sessionId)).thenReturn(snapshot("Add the tea leaves.", stepId));
+        // Used to escape the handler, which made Spring close the socket mid-cook.
+        when(schedulerService.completeStep(sessionId, stepId))
+                .thenThrow(new IllegalStateException("Step is not currently active (status=PENDING)"));
+
+        handler.handleTextMessage(socket, userText("next"));
+
+        List<JsonNode> errors = framesOfType("error");
+        assertEquals(1, errors.size(), "the failure must be reported on the same socket");
+        assertTrue(errors.get(0).path("data").path("message").asText().contains("isn't active"));
+    }
+
     private VoiceCommandResultDto nextCommand() {
         VoiceCommandResultDto dto = new VoiceCommandResultDto();
         dto.command = "NEXT";
@@ -175,10 +192,14 @@ class AudioStreamWebSocketHandlerTest {
     }
 
     private List<JsonNode> snapshotFrames() throws Exception {
+        return framesOfType("session_snapshot");
+    }
+
+    private List<JsonNode> framesOfType(String type) throws Exception {
         List<JsonNode> frames = new ArrayList<>();
         for (TextMessage message : sent) {
             JsonNode node = objectMapper.readTree(message.getPayload());
-            if ("session_snapshot".equals(node.path("type").asText())) frames.add(node);
+            if (type.equals(node.path("type").asText())) frames.add(node);
         }
         return frames;
     }

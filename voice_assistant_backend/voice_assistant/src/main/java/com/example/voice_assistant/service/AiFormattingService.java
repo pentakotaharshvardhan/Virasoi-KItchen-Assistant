@@ -186,7 +186,7 @@ public class AiFormattingService {
                 .bodyValue(body)
                 .retrieve()
                 .bodyToMono(String.class)
-                .block(Duration.ofSeconds(aiProperties.getTimeoutSeconds()));
+                .block(Duration.ofSeconds(aiProperties.getGenerationTimeoutSeconds()));
 
         try {
             JsonNode root = objectMapper.readTree(rawJson);
