@@ -13,7 +13,7 @@ import java.util.Map;
 
 /**
  * Default TTS implementation: Google Cloud Text-to-Speech v1 REST API, authenticated with a
- * simple API key. Uses a *Standard* voice (hi-IN-Standard-A by default) rather than WaveNet/Neural2
+ * simple API key. Uses a *Standard* voice (en-IN-Standard-A by default) rather than WaveNet/Neural2
  * because Standard voices sit in Google's much larger free monthly character quota.
  */
 @Service

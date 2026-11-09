@@ -43,7 +43,7 @@ void main() {
     expect(find.text('Settings'), findsOneWidget);
     expect(find.text('FAQ'), findsOneWidget);
     expect(find.text('App Guide'), findsOneWidget);
-    expect(find.text('Log out'), findsNothing);
+    expect(find.text('Log out'), findsOneWidget);
     expect(find.text('My Recipes'), findsNothing);
     expect(find.text('Helper'), findsNothing);
   });

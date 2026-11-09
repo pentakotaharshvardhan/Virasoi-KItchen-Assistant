@@ -1,5 +1,6 @@
 com\example\voice_assistant\service\SchedulerServiceTest.class
 com\example\voice_assistant\service\VoiceCommandServiceTest.class
+com\example\voice_assistant\controller\RecipeControllerTest.class
 com\example\voice_assistant\service\RecipeServiceLimitTest.class
 com\example\voice_assistant\websocket\AudioStreamWebSocketHandlerTest.class
 com\example\voice_assistant\dto\request\RequestLimitValidationTest.class

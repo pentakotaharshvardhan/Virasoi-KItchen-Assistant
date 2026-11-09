@@ -85,7 +85,7 @@ class AiService {
     final res = await _api.post(ApiConstants.aiCommand, body: {
       'transcript': transcript,
       'availableIngredientNames': availableIngredientNames,
-    });
+    }, timeout: ApiConstants.aiTimeout);
     print(
         "DEBUG: REST Command Classification Response -> ${res is Success ? res.data : 'FAILED'}");
     return switch (res) {
@@ -99,7 +99,7 @@ class AiService {
   Future<Result<String>> askHelp(String question) async {
     final res = await _api.post(ApiConstants.aiHelp, body: {
       'question': question,
-    });
+    }, timeout: ApiConstants.aiTimeout);
     print(
         "DEBUG: REST AI Help Response -> ${res is Success ? res.data : 'FAILED'}");
     return switch (res) {
@@ -115,14 +115,21 @@ class AiService {
     String? screenSummary,
     Uint8List? screenshot,
   }) async {
+    // Keep the JSON body under the backend's 2 MB screenshot limit: an oversized capture is
+    // dropped (the question still gets answered) instead of failing the request.
+    final usableScreenshot = (screenshot != null &&
+            screenshot.length <= ApiConstants.maxScreenshotBytes)
+        ? screenshot
+        : null;
     final body = <String, dynamic>{
       'question': question,
       'screenName': screenName,
       if (screenSummary != null && screenSummary.isNotEmpty)
         'screenSummary': screenSummary,
-      if (screenshot != null) 'screenshot': base64Encode(screenshot),
+      if (usableScreenshot != null) 'screenshot': base64Encode(usableScreenshot),
     };
-    final res = await _api.post(ApiConstants.aiHelper, body: body);
+    final res =
+        await _api.post(ApiConstants.aiHelper, body: body, timeout: ApiConstants.helperTimeout);
     return switch (res) {
       Success(data: final data) =>
         Success((data as Map<String, dynamic>)['answer'].toString()),

@@ -77,6 +77,16 @@ class VoiceViewModel extends ChangeNotifier {
   String? _lastSpokenText;
   DateTime? _lastSpokenAt;
 
+  /// Spoken messages waiting their turn. Only one message is shown and one voice plays at a
+  /// time; the next instruction starts as soon as the previous playback finishes, so two
+  /// snapshots can never talk over each other.
+  final List<_SpeechRequest> _speechQueue = [];
+  bool _isSpeaking = false;
+
+  /// Bumped whenever the screen re-initialises or detaches so a late playback completion from
+  /// the previous screen cannot resume the microphone on this one.
+  int _speechEpoch = 0;
+
   /// True while WE asked the recogniser to stop (end of a listen window, sending a command).
   /// The platform then reports `notListening`, which must not be mistaken for a timeout that
   /// needs an immediate restart - that flapping was `listening -> notListening -> listening`.
@@ -132,6 +142,12 @@ class VoiceViewModel extends ChangeNotifier {
     _active = true;
     readyCheckActive = false;
     onUserReady = null;
+    // A cooking conversation is temporal: each screen starts with a clean transcript, never
+    // carrying over helper questions or ingredient checklist chatter from another screen.
+    transcript.clear();
+    _speechQueue.clear();
+    _isSpeaking = false;
+    _speechEpoch++;
     // onRemainingItemsRequest is intentionally NOT cleared here: the Ingredient screen
     // registers it while it sits underneath this one in the nav stack.
     lastSnapshot = null;
@@ -361,6 +377,9 @@ class VoiceViewModel extends ChangeNotifier {
   /// the same session can be resumed when the user comes back).
   Future<void> pause() async {
     _active = false;
+    _speechEpoch++;
+    _speechQueue.clear();
+    _isSpeaking = false;
     await stopListening();
     if (state != VoiceState.idle) {
       state = VoiceState.idle;
@@ -787,25 +806,44 @@ class VoiceViewModel extends ChangeNotifier {
     _lastSpokenText = text;
     _lastSpokenAt = now;
 
-    print("Assistant Speaking: $text");
+    _speechQueue.add(_SpeechRequest(text, audioBase64));
+    _drainSpeechQueue();
+  }
 
-    // UI Update
-    transcript.add(ChatMessageModel(text: text, sender: ChatSender.assistant));
+  /// Plays queued messages strictly one after another: the chat bubble and the voice for a
+  /// message appear only once the previous message has finished speaking.
+  void _drainSpeechQueue() {
+    if (_isSpeaking || _speechQueue.isEmpty || !_active) return;
+
+    _isSpeaking = true;
+    final request = _speechQueue.removeAt(0);
+    final epoch = _speechEpoch;
+
+    print("Assistant Speaking: ${request.text}");
+    transcript.add(
+        ChatMessageModel(text: request.text, sender: ChatSender.assistant));
     state = VoiceState.speaking;
     notifyListeners();
 
-    // Play sound (Priority to backend audio if available)
     Future<void> playback;
-    if (audioBase64 != null && audioBase64.isNotEmpty) {
-      playback = _voice.synthesizeAndPlay(text, audioBase64: audioBase64);
+    if (request.audioBase64 != null && request.audioBase64!.isNotEmpty) {
+      playback =
+          _voice.synthesizeAndPlay(request.text, audioBase64: request.audioBase64);
     } else {
-      // Fallback to synthesizing text via backend
-      playback = _voice.synthesizeAndPlay(text);
+      playback = _voice.synthesizeAndPlay(request.text);
     }
 
-    playback.then((_) {
-      print("Assistant Finished Speaking.");
+    playback.catchError((Object error) {
+      debugPrint('TTS playback failed: $error');
+    }).whenComplete(() {
+      if (epoch != _speechEpoch) return;
+      _isSpeaking = false;
       if (!_active) return;
+      if (_speechQueue.isNotEmpty) {
+        _drainSpeechQueue();
+        return;
+      }
+      print("Assistant Finished Speaking.");
       state = VoiceState.idle;
       notifyListeners();
       startListening(); // Auto-restart listening
@@ -814,6 +852,9 @@ class VoiceViewModel extends ChangeNotifier {
 
   @override
   void dispose() {
+    _speechEpoch++;
+    _speechQueue.clear();
+    _isSpeaking = false;
     _voice.dispose();
     _wsSub?.cancel();
     _wsSub = null;
@@ -826,4 +867,12 @@ class VoiceViewModel extends ChangeNotifier {
     _sttRetryTimer?.cancel();
     super.dispose();
   }
+}
+
+/// One queued spoken message: text plus the optional pre-rendered audio from the backend.
+class _SpeechRequest {
+  const _SpeechRequest(this.text, this.audioBase64);
+
+  final String text;
+  final String? audioBase64;
 }

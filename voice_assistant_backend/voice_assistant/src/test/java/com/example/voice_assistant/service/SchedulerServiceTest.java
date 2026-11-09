@@ -214,6 +214,34 @@ class SchedulerServiceTest {
         verify(timerService, never()).cancelTimersForSession(session.getId());
     }
 
+    @Test
+    void quietTickDispatchesButNeverNotifiesSockets() {
+        CookingSession session = sessionWithStoves(1);
+        addDish(session, "Rice", 0, StepType.STOVE);
+        SchedulerService scheduler = schedulerFor(session);
+
+        scheduler.tickQuietly(session.getId());
+
+        assertTrue(session.getStoves().get(0).isBusy(), "the dispatch still happens");
+        verify(notificationService, never()).pushSnapshot(eq(session.getId()), any());
+    }
+
+    @Test
+    void finishingTheLastStepOfADishAnnouncesItAndTheEndOfTheMeal() {
+        CookingSession session = sessionWithStoves(1);
+        SessionDish dish = addDish(session, "Dal Tadka", 0, StepType.USER_ACTION);
+        SchedulerService scheduler = schedulerFor(session);
+
+        scheduler.tick(session.getId());
+        com.example.voice_assistant.dto.response.SessionSnapshotDto snapshot =
+                scheduler.completeStep(session.getId(), dish.getSteps().get(0).getId());
+
+        assertEquals(DishStatus.COMPLETED, dish.getStatus());
+        assertTrue(snapshot.message.contains("Dal Tadka"), snapshot.message);
+        assertTrue(snapshot.message.contains("is done"), snapshot.message);
+        assertTrue(snapshot.message.contains("Enjoy your meal"), snapshot.message);
+    }
+
     private SchedulerService schedulerFor(CookingSession session) {
         when(sessionRepository.findByIdForUpdate(session.getId())).thenReturn(Optional.of(session));
         when(sessionRepository.findById(session.getId())).thenReturn(Optional.of(session));

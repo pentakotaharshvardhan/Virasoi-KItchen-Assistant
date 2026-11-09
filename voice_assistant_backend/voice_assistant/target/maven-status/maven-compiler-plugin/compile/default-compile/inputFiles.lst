@@ -24,6 +24,7 @@ C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_
 C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_assistant\src\main\java\com\example\voice_assistant\dto\response\AuthResponse.java
 C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_assistant\src\main\java\com\example\voice_assistant\dto\response\DishSnapshotDto.java
 C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_assistant\src\main\java\com\example\voice_assistant\dto\response\SessionSnapshotDto.java
+C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_assistant\src\main\java\com\example\voice_assistant\dto\response\StepSnapshotDto.java
 C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_assistant\src\main\java\com\example\voice_assistant\dto\response\StoveStatusDto.java
 C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_assistant\src\main\java\com\example\voice_assistant\dto\response\UserTaskDto.java
 C:\Users\Dell\Downloads\Virasoi-KItchen-Assistant\voice_assistant_backend\voice_assistant\src\main\java\com\example\voice_assistant\entity\AppUser.java

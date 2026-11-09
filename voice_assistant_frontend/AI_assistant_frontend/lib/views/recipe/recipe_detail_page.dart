@@ -63,143 +63,177 @@ class _RecipeDetailPageState extends State<RecipeDetailPage> {
     }
     final recipe = vm.recipe!;
     return Scaffold(
-      body: CustomScrollView(
-        slivers: [
-          SliverAppBar(
-            expandedHeight: 260,
-            pinned: true,
-            backgroundColor: AppColors.background,
-            automaticallyImplyLeading: false,
-            leadingWidth: 100,
-            leading: Row(
-              children: [
-                IconButton(
+      body: Stack(
+        children: [
+          CustomScrollView(
+            slivers: [
+              SliverAppBar(
+                expandedHeight: 260,
+                pinned: true,
+                backgroundColor: AppColors.background,
+                automaticallyImplyLeading: false,
+                leadingWidth: 56,
+                leading: IconButton(
                   tooltip: 'Back',
                   onPressed: () => Navigator.of(context).maybePop(),
                   icon: const Icon(Icons.arrow_back_rounded),
                 ),
-                IconButton(
-                  tooltip: 'Cook this recipe',
-                  onPressed: () => Navigator.pushNamed(
+                flexibleSpace: FlexibleSpaceBar(
+                  background: Hero(
+                    tag: 'recipe_image_${recipe.id}',
+                    child: recipe.coverImageUrl == null
+                        ? Container(color: AppColors.surfaceElevated)
+                        : CachedNetworkImage(
+                            imageUrl: recipe.coverImageUrl!, fit: BoxFit.cover),
+                  ),
+                ),
+              ),
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Hero(
+                        tag: 'recipe_title_${recipe.id}',
+                        child: Material(
+                          color: Colors.transparent,
+                          child: Text(recipe.title,
+                              style: const TextStyle(
+                                  fontSize: 24, fontWeight: FontWeight.w800)),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Row(
+                        children: [
+                          _InfoChip(
+                              icon: Icons.schedule,
+                              label: '${recipe.totalTimeMinutes} min'),
+                          const SizedBox(width: 8),
+                          _InfoChip(
+                              icon: Icons.restaurant_rounded,
+                              label: '${recipe.baseServes} servings'),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      Text(recipe.description,
+                          style: const TextStyle(
+                              color: AppColors.textSecondary, height: 1.5)),
+                      const SizedBox(height: 28),
+                      const Text('Ingredients',
+                          style: TextStyle(
+                              fontSize: 18, fontWeight: FontWeight.w700)),
+                      const SizedBox(height: 12),
+                      ...recipe.ingredients.map((ing) {
+                        final heroTag = 'zoom_${ing.id}';
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 10),
+                          child: Row(
+                            children: [
+                              GestureDetector(
+                                onTap: ing.imageUrl == null
+                                    ? null
+                                    : () => _zoomImage(
+                                        context, ing.imageUrl!, heroTag),
+                                child: Hero(
+                                  tag: heroTag,
+                                  child: ClipRRect(
+                                    borderRadius: BorderRadius.circular(12),
+                                    child: ing.imageUrl == null
+                                        ? Container(
+                                            width: 52,
+                                            height: 52,
+                                            color: AppColors.surfaceElevated,
+                                            child: const Icon(Icons.set_meal,
+                                                size: 20,
+                                                color: AppColors.textMuted))
+                                        : CachedNetworkImage(
+                                            imageUrl: ing.imageUrl!,
+                                            width: 52,
+                                            height: 52,
+                                            fit: BoxFit.cover),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 14),
+                              Expanded(
+                                  child: Text(ing.name,
+                                      style: const TextStyle(
+                                          fontWeight: FontWeight.w600))),
+                              Text(ing.quantityLabel,
+                                  style: const TextStyle(
+                                      color: AppColors.textSecondary)),
+                            ],
+                          ),
+                        );
+                      }),
+                      const SizedBox(height: 28),
+                      const Text('Steps',
+                          style: TextStyle(
+                              fontSize: 18, fontWeight: FontWeight.w700)),
+                      const SizedBox(height: 12),
+                      ...List.generate(recipe.steps.length, (i) {
+                        final step = recipe.steps[i];
+                        return _StepTile(
+                          index: i,
+                          number: step.stepNumber,
+                          instruction: step.instruction,
+                          durationLabel: step.durationLabel,
+                          onStartTimer: step.baseTimerSeconds > 0
+                              ? () => vm.startStepTimer(i)
+                              : null,
+                        );
+                      }),
+                      const SizedBox(height: 20),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+          Positioned(
+            top: MediaQuery.paddingOf(context).top + 70,
+            right: 18,
+            child: Tooltip(
+              message: 'Start cooking ${recipe.dishName}',
+              child: Material(
+                color: AppColors.surface.withValues(alpha: 0.76),
+                shape: CircleBorder(
+                  side: BorderSide(
+                    color: AppColors.warning.withValues(alpha: 0.8),
+                    width: 1.5,
+                  ),
+                ),
+                clipBehavior: Clip.antiAlias,
+                elevation: 8,
+                shadowColor: Colors.black54,
+                child: InkWell(
+                  customBorder: const CircleBorder(),
+                  onTap: () => Navigator.pushNamed(
                     context,
                     AppRoutes.createRecipe,
                     arguments: recipe.dishName,
                   ),
-                  icon: const Icon(
-                    Icons.add_circle_outline_rounded,
-                    color: AppColors.primary,
-                  ),
-                ),
-              ],
-            ),
-            flexibleSpace: FlexibleSpaceBar(
-              background: Hero(
-                tag: 'recipe_image_${recipe.id}',
-                child: recipe.coverImageUrl == null
-                    ? Container(color: AppColors.surfaceElevated)
-                    : CachedNetworkImage(
-                        imageUrl: recipe.coverImageUrl!, fit: BoxFit.cover),
-              ),
-            ),
-          ),
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Hero(
-                    tag: 'recipe_title_${recipe.id}',
-                    child: Material(
-                      color: Colors.transparent,
-                      child: Text(recipe.title,
-                          style: const TextStyle(
-                              fontSize: 24, fontWeight: FontWeight.w800)),
+                  child: SizedBox(
+                    width: 70,
+                    height: 70,
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(Icons.play_arrow_rounded,
+                            color: AppColors.warning, size: 23),
+                        Text(
+                          'Start',
+                          style: TextStyle(
+                            color: AppColors.warning,
+                            fontWeight: FontWeight.w800,
+                            fontSize: 11,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                  const SizedBox(height: 10),
-                  Row(
-                    children: [
-                      _InfoChip(
-                          icon: Icons.schedule,
-                          label: '${recipe.totalTimeMinutes} min'),
-                      const SizedBox(width: 8),
-                      _InfoChip(
-                          icon: Icons.restaurant_rounded,
-                          label: '${recipe.baseServes} servings'),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                  Text(recipe.description,
-                      style: const TextStyle(
-                          color: AppColors.textSecondary, height: 1.5)),
-                  const SizedBox(height: 28),
-                  const Text('Ingredients',
-                      style:
-                          TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
-                  const SizedBox(height: 12),
-                  ...recipe.ingredients.map((ing) {
-                    final heroTag = 'zoom_${ing.id}';
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 10),
-                      child: Row(
-                        children: [
-                          GestureDetector(
-                            onTap: ing.imageUrl == null
-                                ? null
-                                : () =>
-                                    _zoomImage(context, ing.imageUrl!, heroTag),
-                            child: Hero(
-                              tag: heroTag,
-                              child: ClipRRect(
-                                borderRadius: BorderRadius.circular(12),
-                                child: ing.imageUrl == null
-                                    ? Container(
-                                        width: 52,
-                                        height: 52,
-                                        color: AppColors.surfaceElevated,
-                                        child: const Icon(Icons.set_meal,
-                                            size: 20,
-                                            color: AppColors.textMuted))
-                                    : CachedNetworkImage(
-                                        imageUrl: ing.imageUrl!,
-                                        width: 52,
-                                        height: 52,
-                                        fit: BoxFit.cover),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 14),
-                          Expanded(
-                              child: Text(ing.name,
-                                  style: const TextStyle(
-                                      fontWeight: FontWeight.w600))),
-                          Text(ing.quantityLabel,
-                              style: const TextStyle(
-                                  color: AppColors.textSecondary)),
-                        ],
-                      ),
-                    );
-                  }),
-                  const SizedBox(height: 28),
-                  const Text('Steps',
-                      style:
-                          TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
-                  const SizedBox(height: 12),
-                  ...List.generate(recipe.steps.length, (i) {
-                    final step = recipe.steps[i];
-                    return _StepTile(
-                      index: i,
-                      number: step.stepNumber,
-                      instruction: step.instruction,
-                      durationLabel: step.durationLabel,
-                      onStartTimer: step.baseTimerSeconds > 0
-                          ? () => vm.startStepTimer(i)
-                          : null,
-                    );
-                  }),
-                  const SizedBox(height: 20),
-                ],
+                ),
               ),
             ),
           ),

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:ai_assistant_frontend/core/utils/result.dart';
 import 'package:ai_assistant_frontend/core/utils/secure_storage.dart';
 import 'package:ai_assistant_frontend/models/chat_message_model.dart';
@@ -888,6 +890,31 @@ void main() {
 
       expect(assistants(vm), 2);
       expect(voice.spoken.length, 2);
+    });
+
+    test('a second instruction waits for the first voice to finish', () async {
+      final vm = buildViewModel();
+      await vm.init('s');
+
+      final gate = Completer<void>();
+      voice.playbackGate = gate;
+
+      ws.emit(snapshot('First instruction', 1));
+      await flush();
+      ws.emit(snapshot('Second instruction', 2));
+      await flush();
+
+      expect(assistants(vm), 1, reason: 'one message displayed at a time');
+      expect(voice.spoken, ['First instruction'],
+          reason: 'the second message must not talk over the first');
+
+      gate.complete();
+      voice.playbackGate = null;
+      await flush();
+      await flush();
+
+      expect(assistants(vm), 2);
+      expect(voice.spoken, ['First instruction', 'Second instruction']);
     });
 
     test('the same instruction on a NEW seq (double push) stays silent',

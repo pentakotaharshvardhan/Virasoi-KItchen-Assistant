@@ -33,6 +33,21 @@ void main() {
 
     expect(find.textContaining('Hey, Harsh'), findsOneWidget);
     expect(find.text('Your Recipes'), findsOneWidget);
+    expect(find.text('Add a recipe or start cooking'), findsNothing);
+
+    final addButton = find.byType(FloatingActionButton);
+    expect(addButton, findsOneWidget);
+    expect(tester.widget<FloatingActionButton>(addButton).shape,
+        isA<CircleBorder>());
+    final buttonSize = tester.getSize(addButton);
+    expect(buttonSize.width, buttonSize.height);
+    expect(
+      tester.getCenter(addButton).dx,
+      closeTo(
+        tester.view.physicalSize.width / tester.view.devicePixelRatio / 2,
+        1,
+      ),
+    );
 
     // Unmount so the home screen's looping animations stop.
     await tester.pumpWidget(const SizedBox());

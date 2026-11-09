@@ -76,8 +76,8 @@ stt:
 tts:
   base-url: https://texttospeech.googleapis.com/v1
   api-key: ${GC_API_KEY}
-  language-code: hi-IN
-  voice-name: hi-IN-Standard-A
+  language-code: en-IN
+  voice-name: en-IN-Standard-A
   audio-encoding: MP3
   # Bounded on purpose: synthesis runs inline while the socket/scheduler thread is pushing a
   # frame, so a slow or unauthenticated call must not hold the whole response up for 30s.

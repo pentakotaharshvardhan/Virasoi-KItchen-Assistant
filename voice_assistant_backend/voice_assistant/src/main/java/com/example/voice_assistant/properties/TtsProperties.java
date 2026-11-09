@@ -8,9 +8,9 @@ import org.springframework.stereotype.Component;
 public class TtsProperties {
     private String baseUrl;
     private String apiKey;
-    /** "hi-IN" for Hindi by default - Standard voices (not WaveNet/Neural2) sit in Google's larger free monthly quota. */
-    private String languageCode = "hi-IN";
-    private String voiceName = "hi-IN-Standard-A";
+    /** Indian English by default - Standard voices (not WaveNet/Neural2) sit in Google's larger free monthly quota. */
+    private String languageCode = "en-IN";
+    private String voiceName = "en-IN-Standard-A";
     private String audioEncoding = "MP3";
     private int timeoutSeconds = 30;
 

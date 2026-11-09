@@ -34,6 +34,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -94,8 +96,7 @@ class AudioStreamWebSocketHandlerTest {
     @Test
     void aSnapshotTheSchedulerAlreadyPushedIsNotSentASecondTime() throws Exception {
         when(voiceCommandService.classify(eq("next"), any())).thenReturn(nextCommand());
-        when(schedulerService.tick(sessionId)).thenReturn(snapshot("Finely chop the onion.", stepId));
-        when(sessionDishStepRepository.existsByIdAndSessionDishSession_Id(stepId, sessionId)).thenReturn(true);
+        when(schedulerService.tickQuietly(sessionId)).thenReturn(snapshot("Finely chop the onion.", stepId));
         when(instructionPersonalizationService.personalize(any(), any(), any(), any(), anyInt(), any()))
                 .thenAnswer(invocation -> invocation.getArgument(0));
         when(schedulerService.completeStep(sessionId, stepId)).thenAnswer(invocation -> {
@@ -111,13 +112,15 @@ class AudioStreamWebSocketHandlerTest {
         assertEquals(1, frames.size(),
                 "the requester already got the broadcast - a second copy is the duplicate reply");
         assertTrue(frames.get(0).path("seq").asLong() > 0, "every frame carries a sequence number");
+        // Resolving the implicit step must not dispatch-and-speak on its own.
+        verify(schedulerService, never()).tick(sessionId);
+        verify(schedulerService).tickQuietly(sessionId);
     }
 
     @Test
     void aSnapshotTheSchedulerNeverPushedStillReachesTheRequester() throws Exception {
         when(voiceCommandService.classify(eq("next"), any())).thenReturn(nextCommand());
-        when(schedulerService.tick(sessionId)).thenReturn(snapshot("Finely chop the onion.", stepId));
-        when(sessionDishStepRepository.existsByIdAndSessionDishSession_Id(stepId, sessionId)).thenReturn(true);
+        when(schedulerService.tickQuietly(sessionId)).thenReturn(snapshot("Finely chop the onion.", stepId));
         // e.g. the "session is no longer active" early return: returned before any push
         when(schedulerService.completeStep(sessionId, stepId))
                 .thenReturn(snapshot("This cooking session is no longer active.", null));
@@ -132,8 +135,7 @@ class AudioStreamWebSocketHandlerTest {
     @Test
     void aSecondCommandAfterTheFirstPushStillDeliversOneFrameEach() throws Exception {
         when(voiceCommandService.classify(eq("next"), any())).thenReturn(nextCommand());
-        when(schedulerService.tick(sessionId)).thenReturn(snapshot("Finely chop the onion.", stepId));
-        when(sessionDishStepRepository.existsByIdAndSessionDishSession_Id(stepId, sessionId)).thenReturn(true);
+        when(schedulerService.tickQuietly(sessionId)).thenReturn(snapshot("Finely chop the onion.", stepId));
         when(instructionPersonalizationService.personalize(any(), any(), any(), any(), anyInt(), any()))
                 .thenAnswer(invocation -> invocation.getArgument(0));
         when(schedulerService.completeStep(eq(sessionId), eq(stepId))).thenAnswer(invocation -> {

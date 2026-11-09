@@ -143,14 +143,14 @@ doing on-device TTS. If synthesis fails, the field is simply omitted and the tex
    - `stt.api-key` / `tts.api-key` — a Google Cloud API key (Cloud Console → APIs & Services →
      Credentials), with the **Cloud Speech-to-Text API** and **Cloud Text-to-Speech API** enabled on
      that project. Google's standard STT model includes ~60 minutes/month free; TTS Standard voices
-     (not WaveNet/Neural2 - that's why `tts.voice-name` defaults to `hi-IN-Standard-A`) sit in a much
+     (not WaveNet/Neural2 - that's why `tts.voice-name` defaults to `en-IN-Standard-A`) sit in a much
      larger free monthly character quota. Double-check current limits in your Cloud Console, since
      free-tier terms can change.
    - `stt.audio-encoding` / `stt.sample-rate-hertz` **must match** whatever format your Flutter
      recorder actually produces — Google's REST API needs an explicit encoding, unlike Whisper's
      format-sniffing multipart upload. Defaults assume 16kHz mono LINEAR16 (WAV/PCM); switch to
      `WEBM_OPUS` if you're streaming compressed audio instead.
-   - `stt.language-code` / `tts.language-code` default to `en-IN` / `hi-IN` — set both to `hi-IN` if
+   - `stt.language-code` / `tts.language-code` default to `en-IN` / `en-IN` — set both to `hi-IN` if
      your users speak Hindi, or add a per-request override later if you need bilingual support.
 3. `SpeechToTextService` (default bean: `GoogleCloudSpeechToTextService`) and `TextToSpeechService`
    (default bean: `GoogleCloudTextToSpeechService`) are both plain interfaces — swap in Azure

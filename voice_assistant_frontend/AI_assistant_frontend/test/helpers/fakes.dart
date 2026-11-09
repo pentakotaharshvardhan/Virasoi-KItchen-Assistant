@@ -79,6 +79,9 @@ class FakeVoiceEngine implements VoiceEngine {
 
   final List<String> spoken = [];
   final List<String?> audioPayloads = [];
+
+  /// When set, playback blocks until the test completes it, so queued speech can be observed.
+  Completer<void>? playbackGate;
   int startCalls = 0;
   int stopCalls = 0;
   int initTtsCalls = 0;
@@ -145,6 +148,8 @@ class FakeVoiceEngine implements VoiceEngine {
   Future<void> synthesizeAndPlay(String text, {String? audioBase64}) async {
     spoken.add(text);
     audioPayloads.add(audioBase64);
+    final gate = playbackGate;
+    if (gate != null) await gate.future;
   }
 
   @override

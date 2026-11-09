@@ -14,6 +14,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -65,6 +67,25 @@ public class SchedulerService {
     @Transactional
     public SessionSnapshotDto tick(UUID sessionId) {
         CookingSession session = loadSessionForUpdate(sessionId);
+        return tickInternal(session, true, new ArrayList<>());
+    }
+
+    /**
+     * Same dispatch pass as {@link #tick(UUID)}, but without notifying any socket.
+     *
+     * <p>Used when a caller only needs to *read* the current instruction (e.g. the WebSocket
+     * handler resolving the implicit "current user task"). A lookup must never speak a snapshot
+     * on its own: the action that follows already pushes exactly one frame, and a lookup that
+     * also pushed made one "next" produce two different-sounding instructions.</p>
+     */
+    @Transactional
+    public SessionSnapshotDto tickQuietly(UUID sessionId) {
+        CookingSession session = loadSessionForUpdate(sessionId);
+        return tickInternal(session, false, new ArrayList<>());
+    }
+
+    private SessionSnapshotDto tickInternal(CookingSession session, boolean notify,
+                                            List<String> completedDishNames) {
         if (session.getStatus() != SessionStatus.ACTIVE) {
             return buildSnapshot(session, session.getStatus() == SessionStatus.CANCELLED
                     ? "This cooking session was cancelled."
@@ -76,17 +97,19 @@ public class SchedulerService {
         boolean changed = true;
         int guard = 0;
         while (changed && guard++ < 100) {
-            changed = dispatchOnce(session);
+            changed = dispatchOnce(session, completedDishNames);
         }
 
         sessionRepository.save(session);
         cookingSessionService.markSessionCompletedIfAllDishesDone(session);
         if (session.getStatus() == SessionStatus.COMPLETED) {
-            timerService.cancelTimersForSession(sessionId);
+            timerService.cancelTimersForSession(session.getId());
         }
 
-        SessionSnapshotDto snapshot = buildSnapshot(session, computeMessage(session));
-        notificationService.pushSnapshot(sessionId, snapshot);
+        SessionSnapshotDto snapshot = buildSnapshot(session, computeMessage(session, completedDishNames));
+        if (notify) {
+            notificationService.pushSnapshot(session.getId(), snapshot);
+        }
         return snapshot;
     }
 
@@ -95,7 +118,7 @@ public class SchedulerService {
     public SessionSnapshotDto status(UUID sessionId) {
         CookingSession session = loadSession(sessionId);
         String message = session.getStatus() == SessionStatus.ACTIVE
-                ? computeMessage(session)
+                ? computeMessage(session, List.of())
                 : session.getStatus() == SessionStatus.CANCELLED
                         ? "This cooking session was cancelled."
                         : "This session has already finished.";
@@ -160,7 +183,7 @@ public class SchedulerService {
     }
 
     /** One dispatch pass across all active dishes. Returns true if anything changed (so tick() can loop). */
-    private boolean dispatchOnce(CookingSession session) {
+    private boolean dispatchOnce(CookingSession session, List<String> completedDishNames) {
         boolean changedAnything = false;
 
         List<SessionDish> orderedDishes = session.getDishes().stream()
@@ -171,6 +194,7 @@ public class SchedulerService {
         for (SessionDish dish : orderedDishes) {
             if (dish.getCurrentStepIndex() >= dish.getSteps().size()) {
                 dish.setStatus(DishStatus.COMPLETED);
+                recordDishCompleted(dish, completedDishNames);
                 changedAnything = true;
                 continue;
             }
@@ -188,7 +212,7 @@ public class SchedulerService {
                 beginStep(session, step, null);
                 changedAnything = true;
                 if (!step.isRequiresTimer()) {
-                    completeStepInternal(session, dish, step);
+                    completeStepInternal(session, dish, step, completedDishNames);
                 }
                 continue;
             }
@@ -292,10 +316,11 @@ public class SchedulerService {
         }
 
         SessionDish dish = findDishOwning(session, step);
-        completeStepInternal(session, dish, step);
+        List<String> completedDishNames = new ArrayList<>();
+        completeStepInternal(session, dish, step, completedDishNames);
         sessionRepository.save(session);
 
-        return tick(sessionId);
+        return tickInternal(session, true, completedDishNames);
     }
 
     /**
@@ -312,6 +337,7 @@ public class SchedulerService {
         Set<Integer> uniqueIndices = stoveIndices == null
                 ? Set.of()
                 : new LinkedHashSet<>(stoveIndices.stream().filter(index -> index != null).toList());
+        List<String> completedDishNames = new ArrayList<>();
         int released = 0;
         for (Integer index : uniqueIndices) {
             Optional<StoveResource> target = session.getStoves().stream()
@@ -333,7 +359,7 @@ public class SchedulerService {
 
             if (!step.getStepType().requiresUser()
                     || !stepId.equals(session.getUserOccupiedByStepId())) {
-                completeStepInternal(session, findDishOwning(session, step), step);
+                completeStepInternal(session, findDishOwning(session, step), step, completedDishNames);
             }
         }
 
@@ -342,7 +368,7 @@ public class SchedulerService {
                     "I couldn't find an active cooking task on the stove number you named.");
         }
         sessionRepository.save(session);
-        return tick(sessionId);
+        return tickInternal(session, true, completedDishNames);
     }
 
     /** Releases only the user resource. Stove ownership is independent and remains untouched. */
@@ -354,8 +380,9 @@ public class SchedulerService {
         }
 
         UUID stepId = session.getUserOccupiedByStepId();
+        List<String> completedDishNames = new ArrayList<>();
         if (stepId == null) {
-            return tick(sessionId);
+            return tickInternal(session, true, completedDishNames);
         }
 
         SessionDishStep step = findStep(session, stepId).orElse(null);
@@ -363,17 +390,17 @@ public class SchedulerService {
         timerService.cancelUserReminder(sessionId, stepId);
         if (step == null || !isActiveStatus(step.getStatus())) {
             sessionRepository.save(session);
-            return tick(sessionId);
+            return tickInternal(session, true, completedDishNames);
         }
 
         boolean stoveStillHeld = step.getStepType().requiresStove()
                 && session.getStoves().stream().anyMatch(stove ->
                         stepId.equals(stove.getOccupiedByStepId()) && stove.isBusy());
         if (!stoveStillHeld) {
-            completeStepInternal(session, findDishOwning(session, step), step);
+            completeStepInternal(session, findDishOwning(session, step), step, completedDishNames);
         }
         sessionRepository.save(session);
-        return tick(sessionId);
+        return tickInternal(session, true, completedDishNames);
     }
 
     /**
@@ -428,7 +455,8 @@ public class SchedulerService {
         return snapshot;
     }
 
-    private void completeStepInternal(CookingSession session, SessionDish dish, SessionDishStep step) {
+    private void completeStepInternal(CookingSession session, SessionDish dish, SessionDishStep step,
+                                      List<String> completedDishNames) {
         step.setStatus(StepStatus.COMPLETED);
         timerService.cancelTimer(step.getId());
         timerService.cancelUserReminder(session.getId(), step.getId());
@@ -450,6 +478,16 @@ public class SchedulerService {
         dish.setCurrentStepIndex(dish.getCurrentStepIndex() + 1);
         if (dish.getCurrentStepIndex() >= dish.getSteps().size()) {
             dish.setStatus(DishStatus.COMPLETED);
+            recordDishCompleted(dish, completedDishNames);
+        }
+    }
+
+    /** Remembers a dish finishing inside this tick so the spoken message can announce it. */
+    private void recordDishCompleted(SessionDish dish, List<String> completedDishNames) {
+        String name = dish.getDishName();
+        if (name == null || name.isBlank()) return;
+        if (!completedDishNames.contains(name)) {
+            completedDishNames.add(name);
         }
     }
 
@@ -477,24 +515,48 @@ public class SchedulerService {
                 .orElseThrow(() -> new IllegalStateException("Step is not attached to any dish in this session"));
     }
 
-    private String computeMessage(CookingSession session) {
+    private String computeMessage(CookingSession session, Collection<String> completedDishNames) {
+        String completion = completionAnnouncement(completedDishNames);
         Optional<SessionDishStep> activeUserStep = Optional.ofNullable(session.getUserOccupiedByStepId())
                 .flatMap(stepId -> findStep(session, stepId));
-        if (activeUserStep.isPresent()) return activeUserStep.get().getInstruction();
+        if (activeUserStep.isPresent()) return prefix(completion, activeUserStep.get().getInstruction());
         return session.getDishes().stream()
                 .flatMap(d -> d.getSteps().stream())
                 .filter(s -> s.getStatus() == StepStatus.TIMER_COMPLETED_AWAITING_USER)
                 .findFirst()
-                .map(s -> s.getInstruction())
+                .map(s -> prefix(completion, s.getInstruction()))
                 .orElseGet(() -> {
                     boolean anyoneCooking = session.getDishes().stream()
                             .flatMap(d -> d.getSteps().stream())
                             .anyMatch(s -> s.getStatus() == StepStatus.TIMER_RUNNING);
                     boolean allDone = session.getDishes().stream().allMatch(d -> d.getStatus() == DishStatus.COMPLETED);
-                    if (allDone && !session.getDishes().isEmpty()) return "All dishes are done. Enjoy your meal!";
-                    if (anyoneCooking) return "Everything's cooking - I'll let you know when something needs you.";
-                    return "Waiting for the next available stove or task.";
+                    if (allDone && !session.getDishes().isEmpty()) {
+                        return prefix(completion, "All dishes are done. Enjoy your meal!");
+                    }
+                    if (anyoneCooking) {
+                        return prefix(completion,
+                                "Everything's cooking - I'll let you know when something needs you.");
+                    }
+                    return prefix(completion, "Waiting for the next available stove or task.");
                 });
+    }
+
+    /** "Dal Tadka is done!" / "Dal Tadka and Paneer are done!" - empty when nothing finished. */
+    private String completionAnnouncement(Collection<String> completedDishNames) {
+        if (completedDishNames == null || completedDishNames.isEmpty()) return "";
+        List<String> names = completedDishNames.stream().distinct().toList();
+        String joined;
+        if (names.size() == 1) {
+            joined = "\"" + names.get(0) + "\" is done!";
+        } else {
+            joined = String.join(", ", names.subList(0, names.size() - 1))
+                    + " and \"" + names.get(names.size() - 1) + "\" are done!";
+        }
+        return joined;
+    }
+
+    private String prefix(String prefix, String message) {
+        return prefix == null || prefix.isEmpty() ? message : prefix + " " + message;
     }
 
     public SessionSnapshotDto buildSnapshot(CookingSession session, String message) {
@@ -549,7 +611,25 @@ public class SchedulerService {
             d.dishName = dish.getDishName();
             d.status = dish.getStatus().name();
             d.totalSteps = dish.getSteps().size();
+            d.currentStepIndex = dish.getCurrentStepIndex();
             d.completedSteps = (int) dish.getSteps().stream().filter(s -> s.getStatus() == StepStatus.COMPLETED).count();
+            for (SessionDishStep step : dish.getSteps()) {
+                StepSnapshotDto sd = new StepSnapshotDto();
+                sd.stepId = step.getId();
+                sd.stepNumber = step.getStepNumber();
+                sd.instruction = step.getInstruction();
+                sd.status = step.getStatus().name();
+                sd.stepType = step.getStepType().name();
+                sd.assignedStoveIndex = step.getAssignedStoveIndex();
+                sd.requiresTimer = step.isRequiresTimer();
+                sd.timerSeconds = step.getTimerSeconds();
+                if (step.getTimerEndAt() != null
+                        && step.getStatus() == StepStatus.TIMER_RUNNING) {
+                    long remaining = step.getTimerEndAt().getEpochSecond() - Instant.now().getEpochSecond();
+                    sd.secondsRemaining = Math.max(remaining, 0);
+                }
+                d.steps.add(sd);
+            }
             dto.dishes.add(d);
         }
 

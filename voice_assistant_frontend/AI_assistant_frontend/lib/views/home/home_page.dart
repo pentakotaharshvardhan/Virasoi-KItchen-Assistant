@@ -94,15 +94,6 @@ class _HomePageState extends State<HomePage>
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const _HeroIntroCard(),
-                  const SizedBox(height: 16),
-                  SizedBox(
-                    width: double.infinity,
-                    child: FilledButton.icon(
-                      onPressed: _openCreationChoices,
-                      icon: const Icon(Icons.add_rounded),
-                      label: const Text('Add a recipe or start cooking'),
-                    ),
-                  ),
                   const SizedBox(height: 28),
                   Row(
                     children: [
@@ -160,16 +151,17 @@ class _HomePageState extends State<HomePage>
           ),
         ],
       ),
+      floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
       floatingActionButton: ScaleTransition(
         scale: Tween(begin: 0.94, end: 1.0).animate(
             CurvedAnimation(parent: _fabController, curve: Curves.easeInOut)),
-        child: FloatingActionButton.extended(
+        child: FloatingActionButton(
           onPressed: _openCreationChoices,
+          tooltip: 'Add a recipe or start cooking',
           backgroundColor: AppColors.primary,
           foregroundColor: Colors.black,
-          icon: const Icon(Icons.add_rounded),
-          label: const Text('Create',
-              style: TextStyle(fontWeight: FontWeight.w700)),
+          shape: const CircleBorder(),
+          child: const Icon(Icons.add_rounded, size: 30),
         ),
       ),
     );

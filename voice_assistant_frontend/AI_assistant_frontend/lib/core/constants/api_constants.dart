@@ -89,4 +89,13 @@ class ApiConstants {
       '$baseWsUrl/ws/audio?token=$token&sessionId=$sessionId';
 
   static const Duration requestTimeout = Duration(seconds: 20);
+
+  /// AI calls can sit behind a cold start / Gemini queue; give them room so the helper does
+  /// not report "could not connect" after 20 seconds.
+  static const Duration aiTimeout = Duration(seconds: 45);
+  static const Duration helperTimeout = Duration(seconds: 60);
+
+  /// The helper endpoint rejects payloads over 2 MB, so screenshots larger than this are
+  /// dropped instead of failing the whole request.
+  static const int maxScreenshotBytes = 1400000;
 }

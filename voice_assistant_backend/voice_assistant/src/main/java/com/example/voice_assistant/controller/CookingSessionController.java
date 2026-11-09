@@ -56,10 +56,11 @@ public class CookingSessionController {
         return cookingSessionService.getById(sessionId);
     }
 
-    /** Current live picture of the session: stove states, the user's current task, and dish progress. */
+    /** Current live picture of the session: stove states, the user's current task, and dish progress.
+     *  Read-only: polling this endpoint must not broadcast snapshots to the WebSocket clients. */
     @GetMapping("/{sessionId}/status")
     public SessionSnapshotDto status(@PathVariable UUID sessionId) {
-        return schedulerService.tick(sessionId);
+        return schedulerService.status(sessionId);
     }
 
     /**

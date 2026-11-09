@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../core/constants/app_colors.dart';
 import '../core/routes/app_routes.dart';
+import '../view_models/auth_viewmodel.dart';
 import '../view_models/home_viewmodel.dart';
 
 class AppDrawer extends StatelessWidget {
@@ -90,6 +91,24 @@ class AppDrawer extends StatelessWidget {
                   Navigator.pop(context);
                   Navigator.pushNamed(context, AppRoutes.help);
                 }),
+            const Spacer(),
+            const Divider(),
+            _DrawerTile(
+              icon: Icons.logout_rounded,
+              label: 'Log out',
+              color: AppColors.error,
+              onTap: () async {
+                await context.read<AuthViewModel>().logout();
+                if (context.mounted) {
+                  Navigator.pushNamedAndRemoveUntil(
+                    context,
+                    AppRoutes.login,
+                    (route) => false,
+                  );
+                }
+              },
+            ),
+            const SizedBox(height: 12),
           ],
         ),
       ),

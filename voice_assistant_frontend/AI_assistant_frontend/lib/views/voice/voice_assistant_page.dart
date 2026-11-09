@@ -1,12 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../../core/constants/api_constants.dart';
 import '../../core/constants/app_colors.dart';
-import '../../core/network/api_client.dart';
 import '../../core/utils/result.dart';
 import '../../models/chat_message_model.dart';
-import '../../models/recipe_model.dart';
-import '../../models/recipe_step_model.dart';
 import '../../services/session_service.dart';
 import '../../services/helper_assistant_launcher.dart';
 import '../../services/voice_service.dart';
@@ -43,8 +39,7 @@ class _VoiceAssistantPageState extends State<VoiceAssistantPage>
 
   bool _showSteps = false;
   bool _isCancellingSession = false;
-  List<RecipeStepModel> _steps = [];
-  bool _stepsLoading = false;
+  int _selectedDish = 0;
 
   final TextEditingController _textController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
@@ -71,10 +66,6 @@ class _VoiceAssistantPageState extends State<VoiceAssistantPage>
       } else if (!widget.helpMode) {
         // Ask for the current state so the first cooking instruction is spoken immediately.
         _vm.requestStatus();
-      }
-
-      if (widget.recipeId != null && !widget.helpMode) {
-        _loadSteps(widget.recipeId!);
       }
     });
   }
@@ -118,19 +109,6 @@ class _VoiceAssistantPageState extends State<VoiceAssistantPage>
       _vm.speakText(ing.errorMessage ??
           "Sorry, I couldn't start cooking. Please try again.");
     }
-  }
-
-  Future<void> _loadSteps(String recipeId) async {
-    setState(() => _stepsLoading = true);
-    final res = await ApiClient.instance.get(ApiConstants.recipeById(recipeId));
-    if (!mounted) return;
-    if (res is Success) {
-      final data = res.data;
-      if (data is Map<String, dynamic>) {
-        setState(() => _steps = RecipeModel.fromJson(data).steps);
-      }
-    }
-    if (mounted) setState(() => _stepsLoading = false);
   }
 
   void _sendTyped() {
@@ -203,6 +181,8 @@ class _VoiceAssistantPageState extends State<VoiceAssistantPage>
     );
     if (mounted && !widget.helpMode) {
       await _vm.startListening();
+      // Catch up on anything the kitchen did while the helper overlay was open.
+      _vm.requestStatus();
     }
   }
 
@@ -279,6 +259,12 @@ class _VoiceAssistantPageState extends State<VoiceAssistantPage>
               ),
               tooltip: 'Recipe steps',
               onPressed: () => setState(() => _showSteps = !_showSteps),
+            ),
+          if (!widget.helpMode)
+            IconButton(
+              icon: const Icon(Icons.support_agent_rounded),
+              tooltip: 'Open helper',
+              onPressed: _openHelperAssistant,
             ),
         ],
       ),
@@ -504,62 +490,65 @@ class _VoiceAssistantPageState extends State<VoiceAssistantPage>
   }
 
   // ---------------------------------------------------------------------
-  // Recipe steps panel
+  // Recipe steps panel (one tab per dish, up to 4 dishes)
   // ---------------------------------------------------------------------
 
-  int get _completedSteps {
-    final dishes = _vm.lastSnapshot?['dishes'];
-    if (dishes is List) {
-      for (final d in dishes) {
-        if (d is Map && d['completedSteps'] != null) {
-          return (d['completedSteps'] as num).toInt();
-        }
-      }
+  List<Map<String, dynamic>> get _dishes {
+    final raw = _vm.lastSnapshot?['dishes'];
+    if (raw is List) {
+      return raw
+          .whereType<Map>()
+          .map((dish) => Map<String, dynamic>.from(dish))
+          .toList();
     }
-    return 0;
+    return const [];
   }
 
-  bool get _allDishesDone {
-    final dishes = _vm.lastSnapshot?['dishes'];
-    if (dishes is List && dishes.isNotEmpty) {
-      for (final d in dishes) {
-        if (d is Map && d['status'] != 'COMPLETED') return false;
-      }
-      return true;
-    }
-    return false;
-  }
+  static String _dishStatusLabel(String status) => switch (status) {
+        'COMPLETED' => 'Done',
+        'IN_PROGRESS' => 'Cooking',
+        'CANCELLED' => 'Stopped',
+        _ => 'Queued',
+      };
 
-  String get _progressLabel {
-    if (_vm.lastSnapshot == null)
-      return _steps.isEmpty ? '' : 'Not started yet';
-    if (_steps.isNotEmpty) {
-      if (_allDishesDone) return 'All ${_steps.length} steps done';
-      final done = _completedSteps.clamp(0, _steps.length);
-      return 'Step ${done + 1} of ${_steps.length}';
-    }
-    final dishes = _vm.lastSnapshot?['dishes'];
-    if (dishes is List && dishes.isNotEmpty) {
-      final d = dishes.first;
-      if (d is Map) {
-        final done = (d['completedSteps'] as num?)?.toInt() ?? 0;
-        final total = (d['totalSteps'] as num?)?.toInt() ?? 0;
-        if (d['status'] == 'COMPLETED') return 'All $total steps done';
-        if (total > 0) return 'Step ${done + 1} of $total';
-      }
-    }
-    return '';
-  }
+  static Color _dishStatusColor(String status) => switch (status) {
+        'COMPLETED' => AppColors.success,
+        'IN_PROGRESS' => AppColors.primary,
+        'CANCELLED' => AppColors.error,
+        _ => AppColors.textSecondary,
+      };
 
   Widget _buildStepsPanel() {
+    final dishes = _dishes;
+    if (_selectedDish >= dishes.length) {
+      _selectedDish = dishes.isEmpty ? 0 : dishes.length - 1;
+    }
+    final selected = dishes.isEmpty ? null : dishes[_selectedDish];
+    final steps = (selected?['steps'] as List?)
+            ?.whereType<Map>()
+            .map((step) => Map<String, dynamic>.from(step))
+            .toList() ??
+        const <Map<String, dynamic>>[];
+    final status = selected?['status']?.toString() ?? 'PENDING';
+    final total = (selected?['totalSteps'] as num?)?.toInt() ?? steps.length;
+    final done = (selected?['completedSteps'] as num?)?.toInt() ?? 0;
     final currentTask = _vm.lastSnapshot?['currentUserTask'];
     final currentInstruction =
         currentTask is Map ? currentTask['instruction']?.toString() : null;
 
     return Container(
       width: double.infinity,
-      color: AppColors.surfaceCard,
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [AppColors.surfaceElevated, AppColors.surfaceCard],
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+        ),
+        border: Border(
+          bottom: BorderSide(color: AppColors.divider.withOpacity(0.6)),
+        ),
+      ),
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -568,85 +557,144 @@ class _VoiceAssistantPageState extends State<VoiceAssistantPage>
               const Icon(Icons.menu_book_rounded,
                   size: 18, color: AppColors.secondary),
               const SizedBox(width: 8),
-              const Expanded(
+              Expanded(
                 child: Text(
-                  'Recipe steps',
-                  style: TextStyle(
+                  dishes.isEmpty
+                      ? 'Recipe steps'
+                      : 'Recipe steps · ${dishes.length} ${dishes.length == 1 ? 'dish' : 'dishes'}',
+                  style: const TextStyle(
                     color: AppColors.textPrimary,
                     fontWeight: FontWeight.w700,
                     fontSize: 14,
                   ),
                 ),
               ),
-              if (_progressLabel.isNotEmpty)
+              if (selected != null)
                 Container(
                   padding:
                       const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                   decoration: BoxDecoration(
-                    color: AppColors.primary.withOpacity(0.15),
+                    color: _dishStatusColor(status).withOpacity(0.15),
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Text(
-                    _progressLabel,
-                    style: const TextStyle(
-                      color: AppColors.primary,
-                      fontSize: 12,
+                    _dishStatusLabel(status),
+                    style: TextStyle(
+                      color: _dishStatusColor(status),
+                      fontSize: 11,
                       fontWeight: FontWeight.w700,
                     ),
                   ),
                 ),
             ],
           ),
+          if (dishes.length > 1) ...[
+            const SizedBox(height: 10),
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  for (var i = 0; i < dishes.length; i++)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: ChoiceChip(
+                        selected: i == _selectedDish,
+                        onSelected: (_) => setState(() => _selectedDish = i),
+                        avatar: Container(
+                          width: 8,
+                          height: 8,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: _dishStatusColor(
+                                dishes[i]['status']?.toString() ?? 'PENDING'),
+                          ),
+                        ),
+                        label: Text(
+                          dishes[i]['dishName']?.toString() ?? 'Dish ${i + 1}',
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
+          if (selected != null) ...[
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(6),
+                    child: LinearProgressIndicator(
+                      minHeight: 6,
+                      value: total == 0 ? 0 : done / total,
+                      backgroundColor: AppColors.surface,
+                      valueColor:
+                          const AlwaysStoppedAnimation(AppColors.primary),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Text(
+                  total == 0 || status == 'COMPLETED'
+                      ? 'All $total steps done'
+                      : 'Step ${(done + 1).clamp(1, total)} of $total',
+                  style: const TextStyle(
+                    color: AppColors.textSecondary,
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ],
           if (currentInstruction != null) ...[
-            const SizedBox(height: 8),
+            const SizedBox(height: 10),
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
-                color: AppColors.primary.withOpacity(0.08),
-                borderRadius: BorderRadius.circular(10),
+                color: AppColors.primary.withOpacity(0.10),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: AppColors.primary.withOpacity(0.25)),
               ),
-              child: Text(
-                'Now: $currentInstruction',
-                style: const TextStyle(
-                  color: AppColors.textPrimary,
-                  fontSize: 13,
-                  height: 1.35,
-                ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Icon(Icons.restaurant_rounded,
+                      size: 15, color: AppColors.primary),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      currentInstruction,
+                      style: const TextStyle(
+                        color: AppColors.textPrimary,
+                        fontSize: 13,
+                        height: 1.35,
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           ],
-          const SizedBox(height: 4),
-          if (_stepsLoading)
+          const SizedBox(height: 6),
+          if (dishes.isEmpty)
             const Padding(
-              padding: EdgeInsets.symmetric(vertical: 16),
-              child: Center(
-                child: SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                ),
-              ),
-            )
-          else if (_steps.isEmpty)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 12),
+              padding: EdgeInsets.symmetric(vertical: 10),
               child: Text(
-                'No step list available for this recipe.',
+                'Waiting for the first instruction...',
                 style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
               ),
             )
           else
             ConstrainedBox(
-              constraints: const BoxConstraints(maxHeight: 280),
+              constraints: const BoxConstraints(maxHeight: 250),
               child: ListView.builder(
                 shrinkWrap: true,
-                itemCount: _steps.length,
-                itemBuilder: (_, i) => _StepTile(
-                  step: _steps[i],
-                  done: _allDishesDone || i < _completedSteps,
-                  current: !_allDishesDone && i == _completedSteps,
-                ),
+                itemCount: steps.length,
+                itemBuilder: (_, i) => _StepTile(step: steps[i]),
               ),
             ),
         ],
@@ -655,52 +703,114 @@ class _VoiceAssistantPageState extends State<VoiceAssistantPage>
   }
 }
 
-class _StepTile extends StatelessWidget {
-  final RecipeStepModel step;
-  final bool done;
-  final bool current;
+String _stepClockLabel(Map<String, dynamic> step) {
+  final remaining = step['secondsRemaining'];
+  if (remaining is num) {
+    final total = remaining.toInt();
+    return '${total ~/ 60}:${(total % 60).toString().padLeft(2, '0')}';
+  }
+  if (step['status'] == 'TIMER_COMPLETED_AWAITING_USER') return 'Timer done';
+  final seconds = step['timerSeconds'];
+  if (seconds is num) return '${seconds.toInt()}s';
+  return '';
+}
 
-  const _StepTile(
-      {required this.step, required this.done, required this.current});
+class _StepTile extends StatelessWidget {
+  const _StepTile({required this.step});
+
+  final Map<String, dynamic> step;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
+    final status = step['status']?.toString() ?? 'PENDING';
+    final done = status == 'COMPLETED';
+    final cancelled = status == 'CANCELLED';
+    final current = status == 'IN_PROGRESS' ||
+        status == 'TIMER_RUNNING' ||
+        status == 'TIMER_COMPLETED_AWAITING_USER';
+    final timerRunning = status == 'TIMER_RUNNING';
+    final stove = step['assignedStoveIndex'];
+    final clock = _stepClockLabel(step);
+
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 3),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color:
+            current ? AppColors.primary.withOpacity(0.08) : Colors.transparent,
+        borderRadius: BorderRadius.circular(10),
+      ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Padding(
             padding: const EdgeInsets.only(top: 1),
-            child: done
-                ? const Icon(Icons.check_circle_rounded,
-                    size: 18, color: AppColors.success)
-                : current
-                    ? const Icon(Icons.radio_button_checked,
-                        size: 18, color: AppColors.primary)
-                    : const Icon(Icons.radio_button_unchecked,
-                        size: 18, color: AppColors.textSecondary),
+            child: Icon(
+              done
+                  ? Icons.check_circle_rounded
+                  : cancelled
+                      ? Icons.cancel_rounded
+                      : current
+                          ? (timerRunning
+                              ? Icons.timer_rounded
+                              : Icons.radio_button_checked)
+                          : Icons.radio_button_unchecked,
+              size: 18,
+              color: done
+                  ? AppColors.success
+                  : cancelled
+                      ? AppColors.error
+                      : current
+                          ? AppColors.primary
+                          : AppColors.textSecondary,
+            ),
           ),
           const SizedBox(width: 10),
           Expanded(
-            child: Text(
-              step.instruction,
-              style: TextStyle(
-                fontSize: 13.5,
-                height: 1.35,
-                color: done ? AppColors.textSecondary : AppColors.textPrimary,
-                decoration: done ? TextDecoration.lineThrough : null,
-              ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  step['instruction']?.toString() ?? '',
+                  style: TextStyle(
+                    fontSize: 13,
+                    height: 1.4,
+                    color:
+                        done ? AppColors.textSecondary : AppColors.textPrimary,
+                    decoration: done ? TextDecoration.lineThrough : null,
+                  ),
+                ),
+                if (stove != null || clock.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 3),
+                    child: Wrap(
+                      spacing: 10,
+                      children: [
+                        if (stove != null)
+                          Text(
+                            'Stove $stove',
+                            style: const TextStyle(
+                                fontSize: 11, color: AppColors.textMuted),
+                          ),
+                        if (clock.isNotEmpty)
+                          Text(
+                            clock,
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: timerRunning
+                                  ? FontWeight.w700
+                                  : FontWeight.w500,
+                              color: timerRunning
+                                  ? AppColors.warning
+                                  : AppColors.textMuted,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+              ],
             ),
           ),
-          if (step.durationLabel.isNotEmpty) ...[
-            const SizedBox(width: 8),
-            Text(
-              step.durationLabel,
-              style: const TextStyle(
-                  fontSize: 11.5, color: AppColors.textSecondary),
-            ),
-          ],
         ],
       ),
     );

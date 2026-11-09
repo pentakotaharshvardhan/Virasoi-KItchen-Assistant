@@ -38,33 +38,33 @@ class ApiClient {
     );
   }
 
-  Future<Result<dynamic>> get(String path, {Map<String, dynamic>? query, bool auth = true}) async {
+  Future<Result<dynamic>> get(String path, {Map<String, dynamic>? query, bool auth = true, Duration? timeout}) async {
     try {
       final res = await _client
           .get(_uri(path, query), headers: await _headers(withAuth: auth))
-          .timeout(ApiConstants.requestTimeout);
+          .timeout(timeout ?? ApiConstants.requestTimeout);
       return _parse(res);
     } catch (e) {
       return Failure(_friendlyError(e));
     }
   }
 
-  Future<Result<dynamic>> post(String path, {Object? body, bool auth = true}) async {
+  Future<Result<dynamic>> post(String path, {Object? body, bool auth = true, Duration? timeout}) async {
     try {
       final res = await _client
           .post(_uri(path), headers: await _headers(withAuth: auth), body: jsonEncode(body ?? {}))
-          .timeout(ApiConstants.requestTimeout);
+          .timeout(timeout ?? ApiConstants.requestTimeout);
       return _parse(res);
     } catch (e) {
       return Failure(_friendlyError(e));
     }
   }
 
-  Future<Result<dynamic>> put(String path, {Object? body, bool auth = true}) async {
+  Future<Result<dynamic>> put(String path, {Object? body, bool auth = true, Duration? timeout}) async {
     try {
       final res = await _client
           .put(_uri(path), headers: await _headers(withAuth: auth), body: jsonEncode(body ?? {}))
-          .timeout(ApiConstants.requestTimeout);
+          .timeout(timeout ?? ApiConstants.requestTimeout);
       return _parse(res);
     } catch (e) {
       return Failure(_friendlyError(e));

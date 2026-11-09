@@ -231,7 +231,7 @@ public class AudioStreamWebSocketHandler extends TextWebSocketHandler {
                     cookingSessionService.addDish(cs, dishName, serves);
                     pendingDishName.remove(session.getId());
                     SessionSnapshotDto snapshot = schedulerService.tick(sessionId); // NotificationService already attaches speech
-                    send(session, "session_snapshot", snapshot);
+                    sendSnapshot(session, sessionId, snapshot);
                 }
                 case "step_command" -> {
                     UUID sessionId = extractSessionId(session);
@@ -399,17 +399,7 @@ public class AudioStreamWebSocketHandler extends TextWebSocketHandler {
             stepId = schedulerService.findActiveStepIdForDish(sessionId, parsed.dishName).orElse(null);
         }
         if (stepId == null) {
-            stepId = parseStepId(meta.get("stepId"));
-            if (stepId == null) {
-                stepId = currentUserTaskStepId(sessionId);
-            }
-        }
-        // Repair a stale id: the app can hand back a step it captured before the session moved
-        // on (already completed, or from an earlier run of the screen). Falling back to the live
-        // current task keeps "next"/"wait" working instead of failing the whole command.
-        if (stepId != null && sessionId != null
-                && !sessionDishStepRepository.existsByIdAndSessionDishSession_Id(stepId, sessionId)) {
-            stepId = currentUserTaskStepId(sessionId);
+            stepId = resolveClientStepId(sessionId, meta.get("stepId"));
         }
         if (stepId == null) {
             send(session, "error", Map.of("message", "I couldn't tell which step you mean - try naming the stove number or dish."));
@@ -458,8 +448,25 @@ public class AudioStreamWebSocketHandler extends TextWebSocketHandler {
         send(session, "session_snapshot", snapshot);
     }
 
+    /**
+     * A client-supplied step id is trusted only when the row actually belongs to this session
+     * (it may be stale from a previous run of the screen). The live current task is then used as
+     * the fallback. Server-derived ids are never re-checked: an extra lookup used to call
+     * {@code tick()} twice, and each tick spoke its own (AI-rewritten) version of the instruction.
+     */
+    private UUID resolveClientStepId(UUID sessionId, Object rawStepId) {
+        UUID candidate = parseStepId(rawStepId);
+        if (candidate != null && sessionId != null
+                && sessionDishStepRepository.existsByIdAndSessionDishSession_Id(candidate, sessionId)) {
+            return candidate;
+        }
+        return currentUserTaskStepId(sessionId);
+    }
+
     private UUID currentUserTaskStepId(UUID sessionId) {
-        SessionSnapshotDto snapshot = schedulerService.tick(sessionId);
+        // Quiet on purpose: resolving the step must not push/speak a snapshot of its own. The
+        // command that follows pushes exactly one frame.
+        SessionSnapshotDto snapshot = schedulerService.tickQuietly(sessionId);
         UserTaskDto task = snapshot.currentUserTask;
         return task == null ? null : task.stepId;
     }
