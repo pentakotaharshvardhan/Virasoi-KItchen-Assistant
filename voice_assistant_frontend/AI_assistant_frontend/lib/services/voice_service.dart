@@ -30,6 +30,10 @@ abstract class VoiceEngine {
   bool get isListening;
   Future<void> speakLocally(String text);
   Future<void> synthesizeAndPlay(String text, {String? audioBase64});
+
+  /// Stops whatever is currently audible. Used when another screen is about to take over the
+  /// speaker, so two utterances can never play at the same time.
+  Future<void> stopSpeaking();
   void dispose();
 }
 
@@ -37,6 +41,7 @@ class VoiceService implements VoiceEngine {
   final stt.SpeechToText _speech = stt.SpeechToText();
   final FlutterTts _tts = FlutterTts();
   final AudioPlayer _audioPlayer = AudioPlayer();
+  Completer<void>? _playbackCompleter;
   bool _sttReady = false;
 
   /// A `permanent: true` recognition error means the platform session is dead - the next
@@ -125,9 +130,32 @@ class VoiceService implements VoiceEngine {
   @override
   Future<void> speakLocally(String text) async {
     final completer = Completer<void>();
-    _tts.setCompletionHandler(() => completer.complete());
+    _playbackCompleter = completer;
+    _tts.setCompletionHandler(() {
+      if (!completer.isCompleted) completer.complete();
+    });
     await _tts.speak(text);
-    return completer.future;
+    await completer.future;
+    if (identical(_playbackCompleter, completer)) _playbackCompleter = null;
+  }
+
+  /// Stops on-device speech or the pre-rendered clip and resolves the pending playback future,
+  /// so a caller awaiting [synthesizeAndPlay] is never left hanging when we cut it off.
+  @override
+  Future<void> stopSpeaking() async {
+    try {
+      await _tts.stop();
+    } catch (_) {
+      // The engine may not be initialised yet.
+    }
+    try {
+      await _audioPlayer.stop();
+    } catch (_) {
+      // Nothing was playing.
+    }
+    final pending = _playbackCompleter;
+    _playbackCompleter = null;
+    if (pending != null && !pending.isCompleted) pending.complete();
   }
 
   /// Plays the audio the backend attached to the message, otherwise speaks on-device.
@@ -157,6 +185,9 @@ class VoiceService implements VoiceEngine {
   @override
   void dispose() {
     _speech.stop();
+    final pending = _playbackCompleter;
+    _playbackCompleter = null;
+    if (pending != null && !pending.isCompleted) pending.complete();
     _tts.stop();
     _audioPlayer.dispose();
   }

@@ -387,6 +387,9 @@ class VoiceViewModel extends ChangeNotifier {
     _speechEpoch++;
     _speechQueue.clear();
     _isSpeaking = false;
+    // Cut off anything still audible: another screen (helper assistant, ingredients) is about to
+    // take over the speaker and only one voice may be heard at a time.
+    await _voice.stopSpeaking();
     await stopListening();
   }
 
@@ -908,6 +911,9 @@ class VoiceViewModel extends ChangeNotifier {
     _speechEpoch++;
     _speechQueue.clear();
     _isSpeaking = false;
+    // Leaving the screen must silence the assistant; otherwise its voice would overlap whatever
+    // speaks next (e.g. the helper assistant opened from this screen).
+    unawaited(_voice.stopSpeaking());
     _machine.dispose();
     _voice.dispose();
     _wsSub?.cancel();

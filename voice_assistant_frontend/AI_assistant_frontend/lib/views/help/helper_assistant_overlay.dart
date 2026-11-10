@@ -105,6 +105,8 @@ class _HelperAssistantOverlayState extends State<HelperAssistantOverlay>
     _messages.clear();
     _screenImage = null;
     unawaited(_voice.stopListening());
+    // Never let a half-finished answer bleed into the cooking screen that resumes next.
+    unawaited(_voice.stopSpeaking());
     _voice.dispose();
     super.dispose();
   }
@@ -122,6 +124,7 @@ class _HelperAssistantOverlayState extends State<HelperAssistantOverlay>
     _listenTimer?.cancel();
     _listenTimer = null;
     unawaited(_voice.stopListening());
+    unawaited(_voice.stopSpeaking());
     if (mounted) Navigator.of(context).pop();
   }
 

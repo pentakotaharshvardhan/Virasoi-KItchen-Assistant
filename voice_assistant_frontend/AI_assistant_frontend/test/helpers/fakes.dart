@@ -84,6 +84,7 @@ class FakeVoiceEngine implements VoiceEngine {
   Completer<void>? playbackGate;
   int startCalls = 0;
   int stopCalls = 0;
+  int stopSpeakingCalls = 0;
   int initTtsCalls = 0;
   int micPermissionCalls = 0;
 
@@ -150,6 +151,12 @@ class FakeVoiceEngine implements VoiceEngine {
     audioPayloads.add(audioBase64);
     final gate = playbackGate;
     if (gate != null) await gate.future;
+  }
+
+  /// Cuts the current utterance short - the view model calls this before another screen speaks.
+  @override
+  Future<void> stopSpeaking() async {
+    stopSpeakingCalls++;
   }
 
   @override

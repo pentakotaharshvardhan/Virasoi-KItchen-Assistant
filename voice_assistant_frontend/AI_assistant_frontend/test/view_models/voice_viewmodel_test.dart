@@ -491,6 +491,29 @@ void main() {
       expect(ws.disposeCalls, 1);
       expect(voice.disposed, isTrue);
     });
+
+    test('pause silences the current utterance so only one voice is heard',
+        () async {
+      final vm = buildViewModel();
+      await vm.init('s');
+      voice.playbackGate = Completer<void>();
+      ws.emit({
+        'type': 'session_snapshot',
+        'data': {'message': 'Chop the onions.'},
+      });
+      await flush();
+      expect(voice.spoken, contains('Chop the onions.'));
+      expect(voice.stopSpeakingCalls, 0);
+
+      await vm.pause();
+
+      expect(voice.stopSpeakingCalls, greaterThanOrEqualTo(1),
+          reason: 'the helper assistant must not talk over the cooking voice');
+      expect(voice.listening, isFalse);
+      voice.playbackGate!.complete();
+      voice.playbackGate = null;
+      vm.dispose();
+    });
   });
 
   group('ready check', () {
