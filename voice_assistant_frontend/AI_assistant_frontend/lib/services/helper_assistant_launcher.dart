@@ -28,7 +28,8 @@ class HelperAssistantLauncher {
     Uint8List? screenshot;
     String? captureError;
     try {
-      screenshot = await ScreenCaptureService.captureCurrentScreen();
+      screenshot = await ScreenCaptureService.captureCurrentScreen()
+          .timeout(const Duration(seconds: 2));
       if (screenshot == null) {
         captureError = 'This screen could not be captured.';
       }

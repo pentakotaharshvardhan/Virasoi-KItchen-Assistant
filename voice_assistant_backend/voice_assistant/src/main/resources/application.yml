@@ -43,6 +43,11 @@ ai:
   base-url: https://generativelanguage.googleapis.com/v1beta
   api-key: ${AI_API_KEY}
   model: gemini-3.1-flash-lite
+  # The contextual helper is the ONLY multimodal call (it may carry the screen screenshot).
+  # Lite text models can reject inline images and image prompts are slower, so it uses its own
+  # model + timeout. Override with AI_HELPER_MODEL if your key exposes a different vision model.
+  helper-model: ${AI_HELPER_MODEL:gemini-3.1-flash-lite}
+  helper-timeout-seconds: 25
   # Interactive commands must fail over to the deterministic classifier quickly instead of
   # leaving the assistant "thinking" for a whole minute.
   timeout-seconds: 10

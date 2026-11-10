@@ -101,6 +101,61 @@ class VoiceCommandServiceTest {
         assertEquals(List.of(1, 2), stove.stoveIndices);
     }
 
+    @Test
+    void contextualHelperRetriesTextOnlyWhenTheScreenshotCallFails() throws Exception {
+        java.util.concurrent.atomic.AtomicInteger calls =
+                new java.util.concurrent.atomic.AtomicInteger();
+        WebClient.Builder builder = WebClient.builder().exchangeFunction(request -> {
+            if (calls.incrementAndGet() == 1) {
+                return Mono.just(ClientResponse.create(HttpStatus.SERVICE_UNAVAILABLE).build());
+            }
+            return Mono.just(ClientResponse.create(HttpStatus.OK)
+                    .header("Content-Type", "application/json")
+                    .body(candidateText("Say next when you finish this step."))
+                    .build());
+        });
+
+        VoiceCommandService service = new VoiceCommandService(builder, properties(), objectMapper);
+
+        String answer = service.answerContextualHelp(
+                "what next?", "Cooking Assistant", null, new byte[] {1, 2, 3});
+
+        assertEquals("Say next when you finish this step.", answer,
+                "a vision outage must not lose the answer");
+        assertEquals(2, calls.get());
+    }
+
+    @Test
+    void contextualHelperAnswersGracefullyWhenEveryModelFails() {
+        WebClient.Builder builder = WebClient.builder().exchangeFunction(request ->
+                Mono.just(ClientResponse.create(HttpStatus.SERVICE_UNAVAILABLE).build()));
+
+        VoiceCommandService service = new VoiceCommandService(builder, properties(), objectMapper);
+
+        String answer = service.answerContextualHelp(
+                "what next?", "Cooking Assistant", null, null);
+
+        org.junit.jupiter.api.Assertions.assertTrue(
+                answer.startsWith("Sorry, I couldn't come up with an answer"),
+                "the helper endpoint must never surface a 500");
+    }
+
+    private AiProperties properties() {
+        AiProperties properties = new AiProperties();
+        properties.setBaseUrl("https://ai.example.test");
+        properties.setApiKey("test");
+        properties.setModel("test-model");
+        properties.setHelperModel("test-vision-model");
+        properties.setTimeoutSeconds(1);
+        properties.setHelperTimeoutSeconds(1);
+        return properties;
+    }
+
+    private String candidateText(String text) {
+        return "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":"
+                + "\"" + text + "\"}]}}]}";
+    }
+
     private VoiceCommandService serviceFor(String modelJson) {
         WebClient.Builder webClientBuilder = WebClient.builder()
                 .exchangeFunction(request -> Mono.just(
@@ -108,12 +163,7 @@ class VoiceCommandServiceTest {
                                 .header("Content-Type", "application/json")
                                 .body(modelJson)
                                 .build()));
-        AiProperties properties = new AiProperties();
-        properties.setBaseUrl("https://ai.example.test");
-        properties.setApiKey("test");
-        properties.setModel("test-model");
-        properties.setTimeoutSeconds(1);
-        return new VoiceCommandService(webClientBuilder, properties, objectMapper);
+        return new VoiceCommandService(webClientBuilder, properties(), objectMapper);
     }
 
     private String modelResult(String command, List<String> ingredients, List<Integer> stoveIndices)

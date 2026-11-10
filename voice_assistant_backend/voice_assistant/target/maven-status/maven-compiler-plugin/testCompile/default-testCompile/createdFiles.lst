@@ -4,6 +4,7 @@ com\example\voice_assistant\controller\RecipeControllerTest.class
 com\example\voice_assistant\service\RecipeServiceLimitTest.class
 com\example\voice_assistant\websocket\AudioStreamWebSocketHandlerTest.class
 com\example\voice_assistant\dto\request\RequestLimitValidationTest.class
+com\example\voice_assistant\service\NotificationServiceTest.class
 com\example\voice_assistant\VoiceAssistantApplicationTests.class
 com\example\voice_assistant\service\CookingSessionServiceTest.class
 com\example\voice_assistant\service\TimerServiceTest.class

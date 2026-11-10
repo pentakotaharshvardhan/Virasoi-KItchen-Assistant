@@ -830,9 +830,8 @@ class _StepTile extends StatelessWidget {
 
 class _ChatBubble extends StatelessWidget {
   final ChatMessageModel message;
-  final bool live;
 
-  const _ChatBubble({required this.message, this.live = false});
+  const _ChatBubble({required this.message});
 
   @override
   Widget build(BuildContext context) {
@@ -846,7 +845,7 @@ class _ChatBubble extends StatelessWidget {
             BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.78),
         decoration: BoxDecoration(
           color: isUser
-              ? AppColors.primary.withOpacity(live ? 0.10 : 0.22)
+              ? AppColors.primary.withOpacity(0.22)
               : AppColors.surfaceElevated,
           borderRadius: BorderRadius.only(
             topLeft: const Radius.circular(16),
@@ -854,9 +853,6 @@ class _ChatBubble extends StatelessWidget {
             bottomLeft: Radius.circular(isUser ? 16 : 4),
             bottomRight: Radius.circular(isUser ? 4 : 16),
           ),
-          border: live
-              ? Border.all(color: AppColors.primary.withOpacity(0.4))
-              : null,
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -864,23 +860,13 @@ class _ChatBubble extends StatelessWidget {
             Flexible(
               child: Text(
                 message.text,
-                style: TextStyle(
+                style: const TextStyle(
                   fontSize: 14.5,
                   height: 1.35,
-                  fontStyle: live ? FontStyle.italic : FontStyle.normal,
                   color: AppColors.textPrimary,
                 ),
               ),
             ),
-            if (live) ...[
-              const SizedBox(width: 8),
-              const SizedBox(
-                width: 8,
-                height: 8,
-                child: CircularProgressIndicator(
-                    strokeWidth: 1.5, color: AppColors.primary),
-              ),
-            ],
           ],
         ),
       ),

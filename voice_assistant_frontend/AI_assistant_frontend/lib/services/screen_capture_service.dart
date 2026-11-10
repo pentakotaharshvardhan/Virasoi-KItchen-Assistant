@@ -10,7 +10,13 @@ class ScreenCaptureService {
   static final GlobalKey boundaryKey = GlobalKey();
 
   static Future<Uint8List?> captureCurrentScreen() async {
-    await WidgetsBinding.instance.endOfFrame;
+    // `endOfFrame` never completes while the app is idle and no frame is scheduled
+    // (e.g. tapping the helper icon on a static screen can otherwise hang the launcher
+    // forever). Nudge a frame and cap the wait so the helper always opens.
+    final binding = WidgetsBinding.instance;
+    binding.scheduleFrame();
+    await binding.endOfFrame
+        .timeout(const Duration(milliseconds: 200), onTimeout: () {});
     final renderObject = boundaryKey.currentContext?.findRenderObject();
     if (renderObject is! RenderRepaintBoundary || renderObject.size.isEmpty) {
       return null;

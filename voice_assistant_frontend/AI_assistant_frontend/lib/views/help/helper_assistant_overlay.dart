@@ -312,19 +312,24 @@ class _HelperAssistantOverlayState extends State<HelperAssistantOverlay>
         await _speakAnswer(answer);
         return;
       case Failure(message: final message):
+        debugPrint('Helper request failed: $message');
         setState(() {
           _messages.add(_HelperMessage(
-            text: 'I could not reach the helper right now: $message',
+            text: 'Sorry, I could not reach the helper right now. '
+                'Please try again in a moment.',
             fromUser: false,
           ));
           _voiceError = 'Helper service unavailable. Please try again.';
+          _isSending = false;
         });
+        _trimMessages();
+        _scrollToBottom();
+        // Always answer out loud, even on failure, so the hands-free user gets a response.
+        await _speakAnswer(
+          'Sorry, I could not reach the helper right now. Please try again in a moment.',
+        );
+        return;
     }
-    _trimMessages();
-    _scrollToBottom();
-    if (!mounted) return;
-    setState(() => _isSending = false);
-    if (_autoListen) _scheduleListening();
   }
 
   Future<void> _speakAnswer(String answer) async {

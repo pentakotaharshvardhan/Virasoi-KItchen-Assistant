@@ -89,11 +89,15 @@ public class NotificationService {
         BigDecimal quantityPerServe = null;
         String unit = null;
         int servesRequested = 1;
+        String instruction = task.instruction;
 
         Optional<SessionDishStep> stepOpt = sessionDishStepRepository.findById(task.stepId);
         if (stepOpt.isPresent()) {
             SessionDishStep step = stepOpt.get();
             servesRequested = step.getSessionDish().getServesRequested();
+            if (step.getInstruction() != null && !step.getInstruction().isBlank()) {
+                instruction = step.getInstruction();
+            }
             RecipeIngredient ingredient = step.getIngredient();
             if (ingredient != null) {
                 ingredientName = ingredient.getName();
@@ -102,8 +106,21 @@ public class NotificationService {
             }
         }
 
-        return instructionPersonalizationService.personalize(
-                snapshot.message, ingredientName, quantityPerServe, unit, servesRequested, stoveIndex);
+        // The scheduler prefixes a dish-completion announcement to the instruction
+        // ("\"Jeera Rice\" is done! Heat the oil..."): rewrite only the instruction and keep
+        // the announcement intact instead of letting the LLM collapse the whole message into
+        // one sentence (which used to drop the "X is done!" part entirely).
+        String announcement = "";
+        String instructionToPersonalize = snapshot.message;
+        if (instruction != null && !instruction.isBlank()
+                && snapshot.message != null && snapshot.message.endsWith(instruction)) {
+            announcement = snapshot.message.substring(0, snapshot.message.length() - instruction.length());
+            instructionToPersonalize = instruction;
+        }
+
+        String personalized = instructionPersonalizationService.personalize(
+                instructionToPersonalize, ingredientName, quantityPerServe, unit, servesRequested, stoveIndex);
+        return announcement + personalized;
     }
 
     /** seq = per-session frame counter; lets the app drop a frame it has already handled. */

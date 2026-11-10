@@ -253,6 +253,23 @@ class SchedulerServiceTest {
     }
 
     @Test
+    void finishingADishAnnouncesItBeforeTheNextDishInstruction() {
+        CookingSession session = sessionWithStoves(1);
+        SessionDish jeera = twoStepUserDish(session, "Jeera Rice", 0);
+        addDish(session, "Paneer Curry", 1, StepType.USER_ACTION);
+        SchedulerService scheduler = schedulerFor(session);
+
+        scheduler.tick(session.getId());
+        scheduler.completeStep(session.getId(), jeera.getSteps().get(0).getId());
+        com.example.voice_assistant.dto.response.SessionSnapshotDto snapshot =
+                scheduler.completeStep(session.getId(), jeera.getSteps().get(1).getId());
+
+        assertEquals(DishStatus.COMPLETED, jeera.getStatus());
+        assertTrue(snapshot.message.startsWith("\"Jeera Rice\" is done!"), snapshot.message);
+        assertTrue(snapshot.message.contains("Prepare Paneer Curry"), snapshot.message);
+    }
+
+    @Test
     void nextDuringARunningTimerCompletesTheStepEarlyAndCancelsTheTimer() {
         CookingSession session = sessionWithStoves(1);
         SessionDish dish = addDish(session, "Masala Chai", 0, StepType.STOVE_AND_USER);
@@ -288,6 +305,25 @@ class SchedulerServiceTest {
             session.getStoves().add(new StoveResource(session, index));
         }
         return session;
+    }
+
+    private SessionDish twoStepUserDish(CookingSession session, String name, int order) {
+        SessionDish dish = new SessionDish();
+        dish.setId(UUID.randomUUID());
+        dish.setSession(session);
+        dish.setDishName(name);
+        dish.setPriorityOrder(order);
+        dish.setStatus(DishStatus.PENDING);
+        for (int number = 1; number <= 2; number++) {
+            SessionDishStep step = new SessionDishStep();
+            step.setId(UUID.randomUUID());
+            step.setStepNumber(number);
+            step.setInstruction("Prepare " + name + " step " + number);
+            step.setStepType(StepType.USER_ACTION);
+            dish.addStep(step);
+        }
+        session.getDishes().add(dish);
+        return dish;
     }
 
     private SessionDish addDish(CookingSession session, String name, int order, StepType type) {

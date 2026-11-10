@@ -1,4 +1,4 @@
 -------------------------------------------------------------------------------
 Test set: com.example.voice_assistant.service.SchedulerServiceTest
 -------------------------------------------------------------------------------
-Tests run: 12, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.510 s -- in com.example.voice_assistant.service.SchedulerServiceTest
+Tests run: 13, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.642 s -- in com.example.voice_assistant.service.SchedulerServiceTest
